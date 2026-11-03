@@ -110,6 +110,20 @@ export class Editor {
   readOnly = false;
   beforeClose: (() => Promise<void>) | null = null;
   reportError: ((message: string) => void) | null = null;
+  /** Named application commands shared by panels and the local agent adapter. */
+  services = new Map<string, (args: Record<string, any>) => Promise<unknown>>();
+  agentPanel: {
+    kind: string;
+    close: () => void;
+    isOpen: () => boolean;
+  } | null = null;
+  assertAgentNetwork:
+    | ((a: {
+        session: string;
+        documentId: string;
+        expectedRevision: number;
+      }) => void)
+    | null = null;
   contextMenu: Vec | null = null;
   formulaDraft: SceneElement | null = null;
   objectDraft: SceneElement | null = null;

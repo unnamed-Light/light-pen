@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Button,
   Dialog,
@@ -556,8 +556,31 @@ export function Studio({
     [templates, setTemplates] = useState<TemplateSummary[]>([]),
     [templateName, setTemplateName] = useState("Новый шаблон"),
     [savingTemplate, setSavingTemplate] = useState(false),
-    [planning, setPlanning] = useState(false),
+    [planning, setPlanningState] = useState(false),
     [working, setWorking] = useState(false);
+  const planningOpen = useRef(planning);
+  planningOpen.current = planning;
+  const setPlanning = (open: boolean) => {
+    if (editor.agentPanel?.kind === "planning") editor.agentPanel = null;
+    planningOpen.current = open;
+    setPlanningState(open);
+  };
+  useEffect(() => {
+    const fn = async () => {
+      setPlanning(true);
+      editor.agentPanel = {
+        kind: "planning",
+        close: () => setPlanning(false),
+        isOpen: () => planningOpen.current,
+      };
+      return { panel: "planning" };
+    };
+    editor.services.set("panel_planning", fn);
+    return () => {
+      editor.services.delete("panel_planning");
+      if (editor.agentPanel?.kind === "planning") editor.agentPanel = null;
+    };
+  }, [editor]);
   const panel = editor.dock;
   useEffect(() => {
     if (editor.templateRequested) {

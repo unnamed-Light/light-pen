@@ -584,6 +584,14 @@ pub fn recent_documents(root: &Path) -> Result<Vec<RecentDocument>, String> {
 }
 
 pub fn open_draft(root: &Path, id: &str) -> Result<Recovery, String> {
+    open_draft_with_path_check(root, id, Ok)
+}
+
+pub fn open_draft_with_path_check(
+    root: &Path,
+    id: &str,
+    check_path: impl FnOnce(Option<String>) -> Result<Option<String>, String>,
+) -> Result<Recovery, String> {
     let path = draft_path(root, id)?;
     let (document, source, mut warning) = match read_document(&path) {
         Ok((document, source)) => (document, source, None),
@@ -599,6 +607,9 @@ pub fn open_draft(root: &Path, id: &str) -> Result<Recovery, String> {
             )
         }
     };
+    // Check the source before comparing it with the draft. Agent callers must
+    // never read an out-of-scope file, including a recovery copy's source.
+    let source = check_path(source)?;
     let needs_save = source
         .as_ref()
         .is_some_and(|p| match read_document(Path::new(p)) {

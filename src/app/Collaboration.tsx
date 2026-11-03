@@ -32,6 +32,7 @@ type Account = {
   user: { login: string; name: string };
 };
 type Room = { id: string; title: string; role: Role };
+type NetworkGuard = () => void;
 export function Collaboration({
   editor,
   saver,
@@ -74,17 +75,23 @@ export function Collaboration({
   const [savedRooms, setSavedRooms] = useState<SavedRoom[]>([]),
     [savedAccounts, setSavedAccounts] = useState<SavedAccount[]>([]);
   const [forget, setForget] = useState<SavedRoom | null>(null);
-  const refreshSaved = async () => {
+  const refreshSaved = async (guard?: NetworkGuard) => {
+    guard?.();
     const value = await credentialStore.read();
+    guard?.();
     setSavedRooms(value.rooms);
     setSavedAccounts(value.accounts);
   };
-  const remember = async (fn: () => Promise<void>) => {
+  const remember = async (fn: () => Promise<void>, guard?: NetworkGuard) => {
+    guard?.();
     try {
       await fn();
-      await refreshSaved();
+      guard?.();
+      await refreshSaved(guard);
+      guard?.();
       return true;
     } catch (e) {
+      guard?.();
       setError(
         "Не удалось сохранить доступ на этом компьютере. Для аккаунта понадобится повторный вход; гостевое приглашение сохраните отдельно. " +
           String(e instanceof Error ? e.message : e),
@@ -117,48 +124,78 @@ export function Collaboration({
       setBusy(false);
     }
   };
-  const flush = async () => {
+  const flush = async (guard?: NetworkGuard) => {
+    guard?.();
     editor.commitText();
     editor.endStyle();
     editor.cancelGesture();
     await saver.flush();
+    guard?.();
   };
-  const detach = async () => {
+  const detach = async (guard?: NetworkGuard) => {
+    guard?.();
     const previous = binding.current;
     binding.current = null;
     active.current = null;
     setClient(null);
     await previous?.close();
+    guard?.();
   };
-  const connect = async (service: string, id: string, token: string) => {
+  const connect = async (
+    service: string,
+    id: string,
+    token: string,
+    expected?: { id: string; revision: number },
+    guard?: NetworkGuard,
+  ) => {
+    guard?.();
     const next = new RoomClient(service, id, token);
     try {
       await next.connect();
+      guard?.();
       if (next.accessKind === "account") {
         const { user } = await api(next.server, "/v1/me", "GET", next.token);
+        guard?.();
         setAccount({ server: next.server, token: next.token, user });
-        await remember(() =>
-          credentialStore.rememberAccount({
-            server: next.server,
-            token: next.token,
-            login: user.login,
-            name: user.name,
-          }),
+        await remember(
+          () =>
+            credentialStore.rememberAccount({
+              server: next.server,
+              token: next.token,
+              login: user.login,
+              name: user.name,
+            }),
+          guard,
         );
+        guard?.();
       }
-      const remembered = await remember(() =>
-        credentialStore.rememberRoom({
-          server: next.server,
-          room: next.room,
-          token: next.token,
-          title: next.snapshot().title,
-          role: next.role,
-          accessedAt: Date.now(),
-        }),
+      const remembered = await remember(
+        () =>
+          credentialStore.rememberRoom({
+            server: next.server,
+            room: next.room,
+            token: next.token,
+            title: next.snapshot().title,
+            role: next.role,
+            accessedAt: Date.now(),
+          }),
+        guard,
       );
-      await flush();
-      await detach();
+      guard?.();
+      await flush(guard);
+      guard?.();
+      if (
+        expected &&
+        (editor.document.id !== expected.id ||
+          editor.document.revision !== expected.revision)
+      )
+        throw Error("REVISION_CONFLICT: board changed while connecting");
+      await detach(guard);
+      guard?.();
       saver.reset(null);
+      // Binding replaces the document synchronously. The original revision
+      // guard must run immediately before it, never after that replacement.
+      guard?.();
       binding.current = bindRoom(editor, next);
       active.current = next;
       setClient(next);
@@ -170,12 +207,14 @@ export function Collaboration({
       throw e;
     }
   };
-  const refresh = async (c = active.current) => {
+  const refresh = async (c = active.current, guard?: NetworkGuard) => {
+    guard?.();
     if (!c || c.role !== "owner") return;
     const [g, m] = await Promise.all([
       api(c.server, `/v1/rooms/${c.room}/invites`, "GET", c.token),
       api(c.server, `/v1/rooms/${c.room}/members`, "GET", c.token),
     ]);
+    guard?.();
     setGrants(g.invites);
     setMembers(m.members);
   };
@@ -234,9 +273,11 @@ export function Collaboration({
     localStorage.setItem("lightpen.service", url);
     setRooms((await api(url, "/v1/rooms", "GET", data.token)).rooms);
   };
-  const disconnect = async () => {
-    await flush();
-    await detach();
+  const disconnect = async (guard?: NetworkGuard) => {
+    await flush(guard);
+    guard?.();
+    await detach(guard);
+    guard?.();
     const now = new Date().toISOString(),
       camera = { ...editor.camera };
     editor.setDocument({
@@ -255,6 +296,241 @@ export function Collaboration({
     saver.schedule(editor.document);
     setCreated("");
   };
+  useEffect(() => {
+    const fn = async (a: Record<string, any>) => {
+      if (busy || !ready) throw Error("BUSY: collaboration is not ready");
+      const c = active.current,
+        expected = {
+          id: a.documentId,
+          revision: a.expectedRevision,
+        };
+      const guard = () => {
+        if (!editor.assertAgentNetwork) throw Error("ACCESS_REVOKED");
+        editor.assertAgentNetwork({
+          session: a.session,
+          documentId: a.documentId,
+          expectedRevision: a.expectedRevision,
+        });
+      };
+      const saved = () => credentialStore.read();
+      const owner = () => {
+        if (!c || c.role !== "owner") throw Error("OWNER_REQUIRED");
+        return c;
+      };
+      const currentAccount = () => {
+        if (!account) throw Error("ACCOUNT_REQUIRED: sign in using the app");
+        return account;
+      };
+      switch (a.action) {
+        case "status":
+          return c
+            ? {
+                connected: true,
+                server: c.server,
+                room: c.room,
+                role: c.role,
+                status: c.status,
+                unconfirmed: c.unconfirmed,
+                peers: [...c.peers.values()],
+              }
+            : {
+                connected: false,
+                account: account
+                  ? { server: account.server, ...account.user }
+                  : null,
+              };
+        case "saved": {
+          const s = await saved();
+          return {
+            accounts: s.accounts.map(({ token, ...rest }) => rest),
+            rooms: s.rooms.map(({ token, ...rest }) => rest),
+          };
+        }
+        case "show_account":
+          setTab("account");
+          setOpen(true);
+          return { requiresUserInput: !account };
+        case "resume_account": {
+          guard();
+          const s = (await saved()).accounts.find(
+            (x) =>
+              x.server === serviceUrl(a.server ?? server) &&
+              (!a.login || x.login === a.login),
+          );
+          guard();
+          if (!s) throw Error("Saved account not found");
+          const { user } = await api(s.server, "/v1/me", "GET", s.token);
+          guard();
+          setAccount({ server: s.server, token: s.token, user });
+          setServer(s.server);
+          return { server: s.server, user };
+        }
+        case "logout": {
+          guard();
+          const ac = currentAccount();
+          await api(ac.server, "/v1/logout", "POST", ac.token);
+          guard();
+          await credentialStore.forgetAccount(ac.server);
+          guard();
+          setAccount(null);
+          setRooms([]);
+          return { loggedOut: true };
+        }
+        case "list_rooms": {
+          const ac = currentAccount();
+          return api(ac.server, "/v1/rooms", "GET", ac.token);
+        }
+        case "create": {
+          await flush(guard);
+          guard();
+          const url = serviceUrl(a.server ?? server);
+          const r = await createRoom(
+            url,
+            editor.document,
+            account?.server === url ? account.token : "",
+          );
+          guard();
+          await credentialStore.rememberRoom({
+            server: url,
+            room: r.id,
+            token: r.token,
+            title: editor.document.title,
+            role: r.role,
+            accessedAt: Date.now(),
+          });
+          guard();
+          setServer(url);
+          localStorage.setItem("lightpen.service", url);
+          await connect(url, r.id, r.token, expected, guard);
+          return { room: r.id, role: r.role, server: url };
+        }
+        case "join": {
+          const invitation = parseInvitation(a.invitation ?? "");
+          await connect(
+            invitation.service,
+            invitation.room,
+            invitation.token,
+            expected,
+            guard,
+          );
+          return { connected: true };
+        }
+        case "reopen": {
+          guard();
+          const url = serviceUrl(a.server ?? server),
+            r = (await saved()).rooms.find(
+              (r) => r.server === url && r.room === a.room,
+            );
+          guard();
+          if (!r) throw Error("Saved room not found");
+          await connect(r.server, r.room, r.token, expected, guard);
+          return { connected: true };
+        }
+        case "forget_room": {
+          const url = serviceUrl(a.server ?? server);
+          if (!a.room) throw Error("room required");
+          await credentialStore.forgetRoom(url, a.room);
+          await refreshSaved();
+          return { forgotten: a.room };
+        }
+        case "disconnect":
+          if (!c) throw Error("NOT_CONNECTED");
+          await disconnect(guard);
+          return { localId: editor.document.id };
+        case "list_access": {
+          const c = owner();
+          const [invites, members] = await Promise.all([
+            api(c.server, `/v1/rooms/${c.room}/invites`, "GET", c.token),
+            api(c.server, `/v1/rooms/${c.room}/members`, "GET", c.token),
+          ]);
+          return { invites: invites.invites, members: members.members };
+        }
+        case "invite": {
+          guard();
+          const c = owner();
+          const g = await api(
+            c.server,
+            `/v1/rooms/${c.room}/invites`,
+            "POST",
+            c.token,
+            {
+              role: a.role ?? "editor",
+              hours: a.hours ?? 24,
+              label: a.label ?? "",
+            },
+          );
+          guard();
+          await refresh(c, guard);
+          guard();
+          return {
+            id: g.id,
+            invitation: invitation(c.server, c.room, g.token),
+          };
+        }
+        case "revoke": {
+          guard();
+          const c = owner();
+          if (!a.id) throw Error("id required");
+          await api(
+            c.server,
+            `/v1/rooms/${c.room}/invites/${encodeURIComponent(a.id)}`,
+            "DELETE",
+            c.token,
+          );
+          guard();
+          await refresh(c, guard);
+          guard();
+          return { revoked: a.id };
+        }
+        case "member": {
+          guard();
+          const c = owner();
+          if (!a.login) throw Error("login required");
+          await api(c.server, `/v1/rooms/${c.room}/members`, "POST", c.token, {
+            login: a.login,
+            role: a.role ?? "editor",
+          });
+          guard();
+          await refresh(c, guard);
+          guard();
+          return { login: a.login };
+        }
+        case "remove_member": {
+          guard();
+          const c = owner();
+          if (!a.login) throw Error("login required");
+          await api(
+            c.server,
+            `/v1/rooms/${c.room}/members/${encodeURIComponent(a.login)}`,
+            "DELETE",
+            c.token,
+          );
+          guard();
+          await refresh(c, guard);
+          guard();
+          return { removed: a.login };
+        }
+        case "claim": {
+          guard();
+          const c = owner(),
+            ac = currentAccount();
+          if (ac.server !== c.server)
+            throw Error("Account belongs to another service");
+          await api(c.server, `/v1/rooms/${c.room}/claim`, "POST", c.token, {
+            accountToken: ac.token,
+          });
+          guard();
+          await connect(c.server, c.room, ac.token, expected, guard);
+          return { claimed: true };
+        }
+      }
+      throw Error("Unknown collaboration action");
+    };
+    editor.services.set("collaboration", fn);
+    return () => {
+      editor.services.delete("collaboration");
+    };
+  });
   const state = client
     ? client.status === "online"
       ? client.unconfirmed

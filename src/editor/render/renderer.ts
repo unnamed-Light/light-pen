@@ -1032,6 +1032,7 @@ export class BoardRenderer {
   async exportPng(
     selectionOnly = false,
     frameId?: string,
+    maxSide = 8192,
   ): Promise<{ dataUrl: string; width: number; height: number }> {
     let elements =
       selectionOnly && this.editor.selected.size
@@ -1081,7 +1082,7 @@ export class BoardRenderer {
     }
     const w = b.maxX - b.minX + 64,
       h = b.maxY - b.minY + 64,
-      scale = Math.min(2, 8192 / w, 8192 / h, Math.sqrt(32_000_000 / (w * h)));
+      scale = Math.min(2, maxSide / w, maxSide / h, Math.sqrt(32_000_000 / (w * h)));
     const canvas = document.createElement("canvas");
     canvas.width = Math.max(1, Math.ceil(w * scale));
     canvas.height = Math.max(1, Math.ceil(h * scale));

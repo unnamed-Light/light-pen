@@ -69,7 +69,7 @@ export function parseCsv(source: string): string[][] {
   }
   return parseDelimited(source, semicolons > commas ? ";" : ",");
 }
-export function toCsv(cells: string[][], spreadsheetSafe = true): string {
+export function toCsv(cells: string[][], spreadsheetSafe = true, separator = ","): string {
   return (
     "\uFEFF" +
     cells
@@ -86,7 +86,7 @@ export function toCsv(cells: string[][], spreadsheetSafe = true): string {
               value = "'" + value;
             return '"' + value.replaceAll('"', '""') + '"';
           })
-          .join(","),
+          .join(separator),
       )
       .join("\r\n")
   );

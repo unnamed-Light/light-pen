@@ -27,6 +27,17 @@ export function Minimap({ editor }: { editor: Editor }) {
   const mapping = useRef({ minX: 0, minY: 0, scale: 1 }),
     drag = useRef<Vec | null>(null);
   useEffect(() => {
+    const fn = async (a: Record<string, any>) => {
+      setOpen(a.open);
+      localStorage.setItem("lightpen.minimap", String(a.open));
+      return { open: a.open };
+    };
+    editor.services.set("minimap", fn);
+    return () => {
+      editor.services.delete("minimap");
+    };
+  }, [editor]);
+  useEffect(() => {
     if (!open || !canvas.current) return;
     const target = canvas.current,
       ctx = target.getContext("2d")!,
@@ -292,6 +303,36 @@ export function Presentation({
     setLaser(null);
     editor.showSlide(slides[next].id);
   };
+  useEffect(() => {
+    const fn = async (a: Record<string, any>) => {
+      if (a.action === "next") change(index + 1);
+      else if (a.action === "previous") change(index - 1);
+      else if (a.action === "show") {
+        const i = slides.findIndex((f) => f.id === a.frameId);
+        if (i < 0) throw Error("Frame not found");
+        change(i);
+      } else if (a.action === "mode") {
+        if (!a.mode) throw Error("mode required");
+        setMode(a.mode);
+      } else if (a.action === "annotate") {
+        if (!a.points?.length) throw Error("points required");
+        if (mode === "laser") setLaser(a.points.at(-1));
+        else setStrokes((s) => [...s, a.points]);
+      } else if (a.action === "clear") {
+        setStrokes([]);
+        setActive([]);
+        setLaser(null);
+      }
+      return {
+        frameId: a.action === "show" ? a.frameId : editor.presentationFrame,
+        mode,
+      };
+    };
+    editor.services.set("presentation_control", fn);
+    return () => {
+      editor.services.delete("presentation_control");
+    };
+  }, [editor, index, mode, slides]);
   useEffect(() => {
     editor.commitText();
     editor.endStyle();

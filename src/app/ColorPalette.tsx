@@ -69,6 +69,14 @@ export function ColorPalette({
       return next[1] === 0 ? [previous[0], next[1], next[2]] : next;
     });
   }, [color]);
+  useEffect(() => {
+    const refresh = () => {
+      setRecent(stored("lightpen.colors"));
+      setFavorites(stored("lightpen.favoriteColors"));
+    };
+    window.addEventListener("lightpen-palette", refresh);
+    return () => window.removeEventListener("lightpen-palette", refresh);
+  }, []);
   const apply = (v: string) => {
     setHex(v);
     editor.setStyle(fill ? { fill: v } : { color: v });

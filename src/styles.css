@@ -1934,3 +1934,12 @@ button {
   padding-left: 20px;
   margin: 0;
 }
+:root .agent-dialog { width: min(580px, calc(100vw - 40px)); }
+.agent-dialog p { line-height: 1.55; }
+.agent-access-status { display: flex; align-items: center; gap: 10px; margin: 20px 0 12px; }
+.agent-access-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--colorNeutralForegroundDisabled, #8a8886); }
+.agent-access-dot.active { background: #0e7870; }
+.agent-grants { display: grid; gap: 8px; }
+.agent-folder { display: flex; gap: 8px; }
+.agent-path { overflow-wrap: anywhere; }
+.agent-dialog textarea { box-sizing: border-box; width: 100%; padding: 12px; resize: vertical; font: 12px/1.5 Consolas, monospace; color: inherit; background: transparent; border: 1px solid #8886; border-radius: 4px; }

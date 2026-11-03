@@ -1,18 +1,19 @@
 {
   "name": "light-pen",
-  "version": "0.4.0-beta.1",
+  "version": "0.5.0-beta.1",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
-    "build": "tsc -b && vite build",
+    "dev": "tsx scripts/generate-agent-catalog.ts && vite --host 127.0.0.1",
+    "build": "tsx scripts/generate-agent-catalog.ts && tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "tauri": "tauri",
     "beta": "tauri build",
     "server": "tsx server/main.ts",
-    "test:collaboration": "vitest run src/collaboration server"
+    "test:collaboration": "vitest run src/collaboration server",
+    "test:agent-native": "node scripts/test-agent-native.mjs release"
   },
   "dependencies": {
     "@fluentui/react-components": "^9.75.1",

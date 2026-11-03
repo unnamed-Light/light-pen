@@ -77,6 +77,9 @@ import { saveVector, openLocalFile } from "../platform/native";
 import { keyboardCode } from "../platform/keyboard";
 import { Collaboration } from "./Collaboration";
 import { credentialStore } from "../platform/credentials";
+import { AgentController } from "../agent/controller";
+import { installApplicationCommands } from "../agent/application";
+import { AgentAccess } from "./AgentAccess";
 
 const TOOLS: { tool: Tool; name: string; key: string }[] = [
   { tool: "select", name: "Выделение", key: "V" },
@@ -115,6 +118,7 @@ const TOOL_CODES: Record<string, Tool> = {
 
 export function App() {
   const [editor] = useState(() => new Editor());
+  const [agent] = useState(() => new AgentController(editor));
   const [saver] = useState(
     () => new SaveCoordinator(backend, () => !editor.isInteracting),
   );
@@ -127,13 +131,13 @@ export function App() {
       : matchMedia("(prefers-color-scheme: dark)").matches;
   });
   const [ready, setReady] = useState(false),
-    [exportOpen, setExportOpen] = useState(false),
+    [exportOpen, setExportOpenState] = useState(false),
     [presenting, setPresenting] = useState(false),
     [busy, setBusy] = useState(false),
     [waitingForFile, setWaitingForFile] = useState(false),
     [message, setMessage] = useState(""),
     [error, setError] = useState(""),
-    [help, setHelp] = useState(false),
+    [help, setHelpState] = useState(false),
     [closeError, setCloseError] = useState(false),
     [title, setTitle] = useState(editor.document.title);
   const [recents, setRecents] = useState<RecentDocument[]>([]),
@@ -143,9 +147,62 @@ export function App() {
     importInput = useRef<HTMLInputElement>(null),
     closing = useRef(false),
     actionLock = useRef(false);
+  const helpOpen = useRef(help),
+    exportDialogOpen = useRef(exportOpen);
+  helpOpen.current = help;
+  exportDialogOpen.current = exportOpen;
+  const setHelp = (open: boolean) => {
+    if (editor.agentPanel?.kind === "help") editor.agentPanel = null;
+    helpOpen.current = open;
+    setHelpState(open);
+  };
+  const setExportOpen = (open: boolean) => {
+    if (editor.agentPanel?.kind === "export") editor.agentPanel = null;
+    exportDialogOpen.current = open;
+    setExportOpenState(open);
+  };
   const rendererReady = useCallback((renderer: BoardRenderer | null) => {
     painter.current = renderer;
   }, []);
+  useEffect(
+    () =>
+      installApplicationCommands(agent, saver, () => painter.current, {
+        theme: setDark,
+        present: setPresenting,
+        help: () => {
+          setHelp(true);
+          editor.agentPanel = {
+            kind: "help",
+            close: () => setHelp(false),
+            isOpen: () => helpOpen.current,
+          };
+        },
+        export: () => {
+          setExportOpen(true);
+          editor.agentPanel = {
+            kind: "export",
+            close: () => setExportOpen(false),
+            isOpen: () => exportDialogOpen.current,
+          };
+        },
+      }),
+    [agent, saver],
+  );
+  useEffect(() => {
+    agent.guard = (changesUi) => {
+      if (!ready || busy || waitingForFile || closing.current)
+        throw Error("BUSY: application is not ready");
+      if (
+        changesUi &&
+        (document.querySelector('[role="dialog"]:not(.agent-dialog)') ||
+          (document.activeElement?.matches(
+            "input:not([readonly]),textarea:not([readonly]),[contenteditable=true]",
+          ) &&
+            !document.activeElement.closest(".agent-dialog")))
+      )
+        throw Error("BUSY: finish the current input or dialog first");
+    };
+  }, [agent, ready, busy, waitingForFile]);
   const notify = useCallback((text: string) => {
     setMessage(text);
   }, []);
@@ -292,6 +349,8 @@ export function App() {
         editor.cancelGesture();
         editor.enabled = false;
         try {
+          agent.disable();
+          await invoke("agent_stop");
           await editor.beforeClose?.();
           await credentialStore.flush();
           await saver.flush();
@@ -657,6 +716,7 @@ export function App() {
     target.__LIGHT_PEN_TEST__ = {
       editor,
       saver,
+      agent,
       get renderer() {
         return painter.current;
       },
@@ -769,6 +829,11 @@ export function App() {
                   Открыть пример
                 </MenuItem>
                 <MenuItem
+                  onClick={() => void editor.services.get("agent_ui")?.({})}
+                >
+                  Доступ ИИ…
+                </MenuItem>
+                <MenuItem
                   onClick={() => {
                     editor.grid = !editor.grid;
                     editor.emit("scene");
@@ -818,6 +883,7 @@ export function App() {
             </Tooltip>
           </div>
           <div className="header-actions">
+            <AgentAccess agent={agent} ready={ready && !busy} />
             <Collaboration
               editor={editor}
               saver={saver}
@@ -1208,6 +1274,7 @@ declare global {
       editor: Editor;
       saver: SaveCoordinator;
       renderer: BoardRenderer | null;
+      agent: AgentController;
       load?: (doc: BoardDocument) => void;
     };
   }

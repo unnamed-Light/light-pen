@@ -53,13 +53,34 @@ export function BoardFeatures({
     editor.emit("ui");
   };
   const [query, setQuery] = useState("");
-  const [settings, setSettings] = useState(false),
-    [history, setHistory] = useState(false),
+  const [settings, setSettingsState] = useState(false),
+    [history, setHistoryState] = useState(false),
     [snapshots, setSnapshots] = useState<DocumentVersion[]>([]),
     [working, setWorking] = useState(false),
     [restore, setRestore] = useState<DocumentVersion | null>(null);
   const context = useRef<HTMLDivElement>(null),
     search = useRef<HTMLInputElement>(null);
+  const settingsOpen = useRef(settings),
+    historyOpen = useRef(history);
+  settingsOpen.current = settings;
+  historyOpen.current = history;
+  const setSettings = (open: boolean) => {
+    if (editor.agentPanel?.kind === "pen") editor.agentPanel = null;
+    settingsOpen.current = open;
+    setSettingsState(open);
+  };
+  const setHistory = (open: boolean) => {
+    if (editor.agentPanel?.kind === "history") editor.agentPanel = null;
+    historyOpen.current = open;
+    setHistoryState(open);
+  };
+  useEffect(
+    () => () => {
+      if (["pen", "history"].includes(editor.agentPanel?.kind ?? ""))
+        editor.agentPanel = null;
+    },
+    [editor],
+  );
   const documentId = editor.document.id;
   const results = useMemo(() => {
     const q = query.trim().toLocaleLowerCase();
@@ -167,6 +188,34 @@ export function BoardFeatures({
       setSnapshots(await versions(editor.document.id));
       setHistory(true);
     });
+  useEffect(() => {
+    const pen = async () => {
+      setSettings(true);
+      editor.agentPanel = {
+        kind: "pen",
+        close: () => setSettings(false),
+        isOpen: () => settingsOpen.current,
+      };
+      return { panel: "pen" };
+    };
+    const history = async () => {
+      await flush();
+      setSnapshots(await versions(editor.document.id));
+      setHistory(true);
+      editor.agentPanel = {
+        kind: "history",
+        close: () => setHistory(false),
+        isOpen: () => historyOpen.current,
+      };
+      return { panel: "history" };
+    };
+    editor.services.set("panel_pen", pen);
+    editor.services.set("panel_history", history);
+    return () => {
+      editor.services.delete("panel_pen");
+      editor.services.delete("panel_history");
+    };
+  }, [editor, flush]);
   const saveSnapshot = () =>
     void run(async () => {
       await checkpoint(editor.document);

@@ -268,19 +268,19 @@ fn crypt(bytes: &[u8], encrypt: bool) -> Result<Vec<u8>, String> {
     Ok(data)
 }
 #[cfg(windows)]
-fn protect(bytes: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn protect(bytes: &[u8]) -> Result<Vec<u8>, String> {
     crypt(bytes, true)
 }
 #[cfg(windows)]
-fn unprotect(bytes: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn unprotect(bytes: &[u8]) -> Result<Vec<u8>, String> {
     crypt(bytes, false)
 }
 #[cfg(not(windows))]
-fn protect(_bytes: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn protect(_bytes: &[u8]) -> Result<Vec<u8>, String> {
     Err("Защищённое хранение доступа доступно в Windows.".into())
 }
 #[cfg(not(windows))]
-fn unprotect(_bytes: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn unprotect(_bytes: &[u8]) -> Result<Vec<u8>, String> {
     Err("Защищённое хранение доступа доступно в Windows.".into())
 }
 

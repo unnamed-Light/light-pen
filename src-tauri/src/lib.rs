@@ -1,3 +1,4 @@
+mod agent;
 mod credentials;
 mod local_links;
 mod storage;
@@ -373,6 +374,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .manage(StorageState::default())
+        .manage(agent::AgentState::default())
         .invoke_handler(tauri::generate_handler![
             persist_document,
             open_document,
@@ -393,8 +395,23 @@ pub fn run() {
             export_text,
             open_local_file,
             load_credentials,
-            save_credentials
+            save_credentials,
+            agent::agent_start,
+            agent::agent_attach,
+            agent::agent_stop,
+            agent::agent_status,
+            agent::agent_reply,
+            agent::agent_file,
+            agent::agent_recent,
+            agent::agent_open_link
         ])
         .run(tauri::generate_context!())
         .expect("Light Pen could not start");
+}
+
+pub fn run_mcp() {
+    if let Err(error) = agent::mcp_main() {
+        eprintln!("Light Pen MCP: {error}");
+        std::process::exit(1);
+    }
 }
