@@ -1,0 +1,25 @@
+/node_modules/
+/dist/
+/builds/
+/src-tauri/target/
+/src-tauri/gen/
+/test-results/
+/playwright-report/
+/reports/
+*.tsbuildinfo
+*.log
+.DS_Store
+Thumbs.db
+
+# Personal boards, backups, local agent installations and credentials
+/boards/
+*.lightpen
+*.lightpen-template
+/.agents/
+/skills-lock.json
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
