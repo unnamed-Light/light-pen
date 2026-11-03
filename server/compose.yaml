@@ -1,0 +1,41 @@
+services:
+  collaboration:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    environment:
+      LIGHT_PEN_ORIGINS: http://tauri.localhost,https://tauri.localhost,tauri://localhost
+      LIGHT_PEN_REGISTRATION: ${LIGHT_PEN_REGISTRATION:-open}
+      LIGHT_PEN_TRUST_PROXY: "true"
+      LIGHT_PEN_MAX_BYTES: ${LIGHT_PEN_MAX_BYTES:-1073741824}
+    volumes:
+      - board-data:/data
+    expose:
+      - "8787"
+    mem_limit: 1g
+    cpus: 2
+    pids_limit: 128
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+  gateway:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      LIGHT_PEN_DOMAIN: ${LIGHT_PEN_DOMAIN:?Set the public domain first}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - tls-data:/data
+      - tls-config:/config
+    depends_on:
+      collaboration:
+        condition: service_healthy
+volumes:
+  board-data:
+  tls-data:
+  tls-config:

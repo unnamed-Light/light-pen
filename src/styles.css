@@ -1,4 +1,5 @@
 :root {
+  --group-navigation-offset: 76px;
   font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
   color: #242424;
   background: #f3f3f3;
@@ -14,6 +15,18 @@
   --accent: #0f6cbd;
   --selected: #e5f0fa;
   --shadow: 0 4px 14px rgba(0, 0, 0, 0.055), 0 1px 3px rgba(0, 0, 0, 0.035);
+}
+.group-scope {
+  position: absolute;
+  left: 50%;
+  bottom: var(--group-navigation-offset);
+  transform: translateX(-50%);
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  max-width: 65vw;
+  overflow: auto;
+  z-index: 8;
 }
 
 /* A single contextual dock keeps new tools out of the drawing area. */
@@ -402,6 +415,311 @@
 .editable-table textarea:focus {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
+}
+.editable-table textarea[aria-invalid="true"] {
+  box-shadow: inset 0 -2px #c42b1c;
+}
+.data-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  margin: 12px 0;
+}
+.data-checkbox input {
+  accent-color: var(--accent);
+}
+.task-details textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 80px;
+  background: var(--subtle);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 8px;
+  border-radius: 4px;
+}
+.planning-dialog {
+  width: min(1180px, calc(100vw - 40px)) !important;
+  max-width: 1180px !important;
+  max-height: calc(100vh - 40px) !important;
+}
+.planning-dialog [class*="DialogContent"] {
+  overflow: auto;
+  min-height: 260px;
+}
+.planning-dialog input,
+.planning-dialog select {
+  font: inherit;
+  min-height: 30px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--text);
+  background: var(--subtle);
+  padding: 4px 7px;
+}
+.planning-filters,
+.planning-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+.planning-filters > input {
+  flex: 1;
+  min-width: 120px;
+}
+.planning-filters .data-checkbox {
+  margin: 0;
+}
+.planning-filters .data-checkbox input {
+  min-height: 0;
+}
+.planning-kanban {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(220px, 1fr));
+  gap: 12px;
+  overflow: auto;
+  max-height: 58vh;
+}
+.planning-column {
+  padding: 10px;
+  background: var(--subtle);
+  border-radius: 6px;
+  min-height: 180px;
+}
+.planning-column h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 12px;
+  display: flex;
+  justify-content: space-between;
+}
+.planning-column h3 span {
+  font-weight: 400;
+  color: var(--muted);
+}
+.planning-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 8px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+}
+.planning-card[draggable="true"] {
+  cursor: grab;
+}
+.planning-card-title {
+  border: 0;
+  padding: 0;
+  text-align: left;
+  color: var(--text);
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.planning-card-meta,
+.planning-tags,
+.planning-warning {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.planning-warning {
+  display: block;
+  color: #b05d13;
+}
+.planning-tags {
+  color: var(--accent);
+}
+.planning-card select {
+  max-width: 100%;
+  font-size: 11px;
+}
+.planning-count {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+.planning-calendar {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(90px, 1fr));
+  min-width: 660px;
+}
+.planning-calendar > strong {
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px;
+}
+.calendar-day {
+  border: 1px solid var(--border);
+  min-height: 92px;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.calendar-day.outside {
+  opacity: 0.5;
+}
+.calendar-day.today {
+  background: var(--selected);
+}
+.calendar-date,
+.calendar-task,
+.calendar-more {
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.calendar-date {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+}
+.calendar-date span {
+  color: var(--muted);
+  font-size: 10px;
+}
+.calendar-task {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.calendar-more {
+  font-size: 10px;
+  color: var(--accent);
+}
+.status-todo {
+  background: #e5f0fa;
+  color: #174b77;
+  fill: #0f6cbd;
+}
+.status-doing {
+  background: #eee5fb;
+  color: #5f398e;
+  fill: #7f52c5;
+}
+.status-done {
+  background: #d7efd9;
+  color: #215e35;
+  fill: #107c50;
+}
+.planning-timeline {
+  min-width: 650px;
+}
+.timeline-heading {
+  margin-left: 210px;
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.timeline-row {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 10px;
+  min-height: 45px;
+  border-top: 1px solid var(--border);
+  padding: 6px 0;
+}
+.timeline-row > button {
+  font: inherit;
+  font-size: 12px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.timeline-track {
+  position: relative;
+  background: repeating-linear-gradient(
+    to right,
+    var(--subtle) 0,
+    var(--subtle) calc(10% - 1px),
+    var(--border) calc(10% - 1px),
+    var(--border) 10%
+  );
+  border-radius: 3px;
+  min-height: 30px;
+}
+.timeline-bar {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  border: 0;
+  border-radius: 3px;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+  cursor: pointer;
+  text-align: left;
+  font-size: 10px;
+  padding: 0 5px;
+}
+.timeline-unscheduled {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 30px;
+  padding-left: 8px;
+}
+.planning-summary svg {
+  display: block;
+  max-width: 700px;
+  width: 100%;
+  font:
+    14px "Segoe UI",
+    sans-serif;
+  fill: var(--text);
+}
+.planning-summary-table {
+  border-collapse: collapse;
+  width: min(100%, 500px);
+  margin-top: 12px;
+}
+.planning-summary-table th,
+.planning-summary-table td {
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  padding: 8px;
+}
+.planning-empty {
+  padding: 18px 0;
+  color: var(--muted);
+}
+.saved-access-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.saved-access-row > button:first-child {
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-start;
+}
+@media (max-width: 760px) {
+  .planning-dialog {
+    width: calc(100vw - 20px) !important;
+  }
+  .planning-filters {
+    align-items: stretch;
+  }
 }
 .form-pair {
   display: grid;
@@ -1542,4 +1860,77 @@ button {
   .properties {
     max-height: calc(100% - 88px);
   }
+}
+:root {
+  --collaboration-accent: #0f6cbd;
+}
+.collaboration-dialog {
+  width: min(580px, calc(100vw - 40px));
+}
+.collaboration-dialog .fui-DialogContent {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-height: 65vh;
+  overflow: auto;
+}
+.collaboration-tabs,
+.shared-access-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.shared-access-row {
+  justify-content: space-between;
+  margin: 8px 0;
+}
+.collaboration-dialog details {
+  border-top: 1px solid var(--colorNeutralStroke2);
+  padding-top: 12px;
+}
+.collaboration-dialog summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.collaboration-dialog textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 80px;
+}
+.shared-room-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.collaboration-trigger {
+  max-width: 230px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.collaborator-cursors {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 6;
+}
+.collaborator-cursor {
+  position: absolute;
+  border-left: 3px solid;
+  min-height: 16px;
+}
+.collaborator-cursor span {
+  display: block;
+  margin-left: 5px;
+  background: var(--colorNeutralBackground1);
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.peer-list {
+  padding-left: 20px;
+  margin: 0;
 }

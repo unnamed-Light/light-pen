@@ -18,5 +18,5 @@ export default defineConfig({
     },
   },
   build: { target: "es2022", sourcemap: false },
-  test: { include: ["src/**/*.test.ts"], environment: "node" },
+  test: { include: ["src/**/*.test.ts", "server/**/*.test.ts"], environment: "node" },
 });

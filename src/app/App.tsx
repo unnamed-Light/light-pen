@@ -35,7 +35,6 @@ import {
   Dismiss20Regular,
   DocumentAdd20Regular,
   FolderOpen20Regular,
-  FullScreenMaximize20Regular,
   Image20Regular,
   Pause20Regular,
   Play20Regular,
@@ -44,8 +43,6 @@ import {
   Stop20Regular,
   WeatherMoon20Regular,
   WeatherSunny20Regular,
-  ZoomIn20Regular,
-  ZoomOut20Regular,
 } from "@fluentui/react-icons";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
@@ -72,12 +69,14 @@ import { ToolIcon } from "./ToolIcon";
 
 import { BoardFeatures } from "./BoardFeatures";
 import { Studio, PropertyDock } from "./Studio";
-import { Minimap, Presentation } from "./Navigation";
+import { Minimap, Presentation, ZoomControls } from "./Navigation";
 import { ExportDialog } from "./ExportDialog";
 import type { ExportScope } from "./ExportDialog";
 import { parseTsv } from "../editor/model/tables";
 import { saveVector, openLocalFile } from "../platform/native";
 import { keyboardCode } from "../platform/keyboard";
+import { Collaboration } from "./Collaboration";
+import { credentialStore } from "../platform/credentials";
 
 const TOOLS: { tool: Tool; name: string; key: string }[] = [
   { tool: "select", name: "Выделение", key: "V" },
@@ -189,6 +188,7 @@ export function App() {
   }, [dark]);
   useEffect(() => {
     let cancelled = false;
+    editor.reportError = setError;
     const off = editor.subscribe((signal) => {
       if (signal === "document") saver.schedule(editor.document);
     });
@@ -231,6 +231,7 @@ export function App() {
       cancelled = true;
       off();
       saver.dispose();
+      editor.reportError = null;
     };
   }, [editor, saver]);
   useEffect(() => {
@@ -291,6 +292,8 @@ export function App() {
         editor.cancelGesture();
         editor.enabled = false;
         try {
+          await editor.beforeClose?.();
+          await credentialStore.flush();
           await saver.flush();
           await getCurrentWindow().destroy();
         } catch {
@@ -558,6 +561,10 @@ export function App() {
         return;
       }
       if (code === "Escape") {
+        if (editor.groupScope.length) {
+          editor.leaveGroup();
+          return;
+        }
         editor.cancelGesture();
         editor.cancelText();
         editor.stopReplay();
@@ -776,6 +783,7 @@ export function App() {
             <input
               className="document-title"
               aria-label="Название доски"
+              readOnly={editor.readOnly}
               maxLength={250}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
@@ -810,6 +818,11 @@ export function App() {
             </Tooltip>
           </div>
           <div className="header-actions">
+            <Collaboration
+              editor={editor}
+              saver={saver}
+              ready={ready && !busy}
+            />
             <Tooltip content="Отменить · Ctrl+Z" relationship="label">
               <Button
                 appearance="subtle"
@@ -963,43 +976,7 @@ export function App() {
             <span className="meta-separator" />
             <span className="meta-caption">На этом устройстве</span>
           </div>
-          <div className="zoom-controls floating">
-            <Tooltip content="Уменьшить" relationship="label">
-              <Button
-                appearance="subtle"
-                icon={<ZoomOut20Regular />}
-                aria-label="Уменьшить"
-                onClick={() => editor.zoom(1 / 1.2)}
-              />
-            </Tooltip>
-            <button
-              className="zoom-value"
-              aria-label="Масштаб 100%"
-              onClick={() => editor.zoom(1 / editor.camera.zoom)}
-            >
-              {Math.round(editor.camera.zoom * 100)}%
-            </button>
-            <Tooltip content="Увеличить" relationship="label">
-              <Button
-                appearance="subtle"
-                icon={<ZoomIn20Regular />}
-                aria-label="Увеличить"
-                onClick={() => editor.zoom(1.2)}
-              />
-            </Tooltip>
-            <div className="zoom-divider" />
-            <Tooltip
-              content="Показать всю доску · Shift+1"
-              relationship="label"
-            >
-              <Button
-                appearance="subtle"
-                icon={<FullScreenMaximize20Regular />}
-                aria-label="Показать всю доску"
-                onClick={() => editor.fit()}
-              />
-            </Tooltip>
-          </div>
+          <ZoomControls editor={editor} />
           {editor.replay && (
             <div
               className="replay-controls floating"

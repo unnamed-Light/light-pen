@@ -167,6 +167,27 @@ function download(blob: Blob, name: string) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
+export async function saveDataText(
+  data: string,
+  title: string,
+  format: "csv" | "tsv" | "md" | "json" | "opml",
+) {
+  const name = title.replace(/[<>:"/\\|?*]/g, "_");
+  if (native) {
+    const path = await save({
+      title: `Экспорт ${format.toUpperCase()}`,
+      defaultPath: `${name}.${format}`,
+      filters: [{ name: format.toUpperCase(), extensions: [format] }],
+    });
+    if (!path) return false;
+    await invoke("export_text", { path: suffix(path, format), data, format });
+  } else
+    download(
+      new Blob([data], { type: "text/plain;charset=utf-8" }),
+      `${name}.${format}`,
+    );
+  return true;
+}
 export async function saveVector(
   data: string | Uint8Array,
   title: string,

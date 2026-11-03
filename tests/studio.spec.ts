@@ -487,18 +487,16 @@ test("software keyboard without physical codes controls tools, search, grouping 
   ) => {
     await page.evaluate(
       ({ key, keyCode, ctrlKey, type }) => {
-        document
-          .querySelector('[data-testid="board"]')!
-          .dispatchEvent(
-            new KeyboardEvent(type, {
-              key,
-              keyCode,
-              ctrlKey,
-              code: "",
-              bubbles: true,
-              cancelable: true,
-            }),
-          );
+        document.querySelector('[data-testid="board"]')!.dispatchEvent(
+          new KeyboardEvent(type, {
+            key,
+            keyCode,
+            ctrlKey,
+            code: "",
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
       },
       { key, keyCode, ctrlKey, type },
     );
@@ -799,6 +797,7 @@ test("overview of ten thousand mixed objects stays responsive with the minimap o
       requestAnimationFrame(() => requestAnimationFrame(() => r())),
     );
     const cold = a.renderer!.stats.lastMs;
+    const phases = { ...a.renderer!.lastPhases };
     const samples = await a.renderer!.measure(35);
     const start = performance.now();
     for (let i = 0; i < 25; i++) {
@@ -807,6 +806,7 @@ test("overview of ten thousand mixed objects stays responsive with the minimap o
     }
     return {
       cold,
+      phases,
       samples,
       visible: a.renderer!.stats.visible,
       totalNavigationMs: performance.now() - start,
@@ -814,9 +814,6 @@ test("overview of ten thousand mixed objects stays responsive with the minimap o
   });
   const sorted = measured.samples.sort((a, b) => a - b),
     p95 = sorted[Math.floor(sorted.length * 0.95)];
-  expect(p95).toBeLessThan(16.7);
-  expect(measured.cold).toBeLessThan(100);
-  expect(measured.visible).toBe(10000);
   console.log(
     "METRIC mixed-overview:",
     JSON.stringify({ ...measured, samples: undefined, p95 }),
@@ -825,6 +822,9 @@ test("overview of ten thousand mixed objects stays responsive with the minimap o
     info.outputPath("mixed-performance.json"),
     JSON.stringify({ ...measured, p95 }, null, 2),
   );
+  expect(p95).toBeLessThan(16.7);
+  expect(measured.cold).toBeLessThan(100);
+  expect(measured.visible).toBe(10000);
 });
 test("rotated frame exports clip vector and PNG contents and a bad formula aborts SVG export", async ({
   page,

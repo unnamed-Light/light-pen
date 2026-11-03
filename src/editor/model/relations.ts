@@ -168,6 +168,9 @@ export function copyElements(
 ): SceneElement[] {
   const ids = new Map(elements.map((e) => [e.id, crypto.randomUUID()])),
     groups = new Map<string, string>();
+  for (const e of elements)
+    for (const id of e.groupPath ?? (e.groupId ? [e.groupId] : []))
+      if (!groups.has(id)) groups.set(id, crypto.randomUUID());
   return elements.map((e) => {
     if (e.groupId && !groups.has(e.groupId))
       groups.set(e.groupId, crypto.randomUUID());
@@ -183,6 +186,7 @@ export function copyElements(
       locked: false,
       createdAt: Date.now(),
       groupId: e.groupId ? groups.get(e.groupId) : undefined,
+      groupPath: e.groupPath?.map((id) => groups.get(id)!),
       startBinding: binding(e.startBinding),
       endBinding: binding(e.endBinding),
       link: e.link

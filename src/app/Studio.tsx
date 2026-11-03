@@ -39,6 +39,7 @@ import {
 } from "../platform/native";
 import type { TemplateSummary } from "../platform/native";
 import { StructuredEditor } from "./StructuredEditor";
+import { Planning } from "./Planning";
 import { ToolIcon } from "./ToolIcon";
 import { CustomColor, TextControls } from "./TextControls";
 
@@ -555,6 +556,7 @@ export function Studio({
     [templates, setTemplates] = useState<TemplateSummary[]>([]),
     [templateName, setTemplateName] = useState("Новый шаблон"),
     [savingTemplate, setSavingTemplate] = useState(false),
+    [planning, setPlanning] = useState(false),
     [working, setWorking] = useState(false);
   const panel = editor.dock;
   useEffect(() => {
@@ -869,6 +871,13 @@ export function Studio({
               </div>
               <div className="property-section">
                 <Button
+                  icon={<Presenter20Regular />}
+                  appearance="subtle"
+                  onClick={() => setPlanning(true)}
+                >
+                  Планирование задач…
+                </Button>
+                <Button
                   icon={<Library20Regular />}
                   appearance="subtle"
                   onClick={() => {
@@ -976,6 +985,14 @@ export function Studio({
           key={editor.objectDraft.id}
           editor={editor}
           element={editor.objectDraft}
+        />
+      )}
+      {planning && (
+        <Planning
+          key={editor.document.id}
+          editor={editor}
+          onClose={() => setPlanning(false)}
+          onError={onError}
         />
       )}
       <Dialog

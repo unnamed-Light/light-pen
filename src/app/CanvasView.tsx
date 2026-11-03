@@ -23,6 +23,7 @@ export function CanvasView({
     text = useRef<HTMLTextAreaElement>(null);
   const renderer = useRef<BoardRenderer | null>(null);
   useSyncExternalStore(editor.subscribeUi, editor.getSnapshot);
+  useSyncExternalStore(editor.subscribeCamera, editor.getCameraSnapshot);
   useEffect(() => {
     const canvas = overlay.current!,
       container = host.current!;

@@ -11,6 +11,17 @@ import {
 import type { Editor } from "../editor/editor";
 import { createDocument, uid, validateDocument } from "../editor/model/types";
 import type { SceneElement } from "../editor/model/types";
+import {
+  gridOf,
+  insertTableRow,
+  insertTableColumn,
+  deleteTableAxis,
+  replaceTableCells,
+  typedValue,
+  queryRecords,
+} from "../editor/model/data";
+import type { DataQuery } from "../editor/model/data";
+import { DataControls, TaskDetails } from "./StructuredFields";
 import { parseTsv, pasteCells } from "../editor/model/tables";
 import { chooseLocalLink, native, readDocument } from "../platform/native";
 import { STATUS_TEXT } from "../editor/render/structured";
@@ -24,6 +35,7 @@ export function StructuredEditor({
   const [draft, setDraft] = useState(() => structuredClone(element)),
     [cell, setCell] = useState<[number, number]>([0, 0]),
     [error, setError] = useState(""),
+    [query, setQuery] = useState<DataQuery>({}),
     [working, setWorking] = useState(false),
     [targets, setTargets] = useState<SceneElement[]>(
       draft.link?.path ? [] : editor.elements.filter((e) => e.id !== draft.id),
@@ -48,11 +60,12 @@ export function StructuredEditor({
     rows = cells.length,
     cols = cells[0].length;
   const changeCells = (next: string[][]) =>
-    patch({
-      cells: next,
-      width: (draft.width * Math.max(1, next[0].length)) / cols,
-      height: (draft.height * Math.max(1, next.length)) / rows,
-    });
+    setDraft((d) => replaceTableCells(d, next));
+  const grid = gridOf(draft);
+  const visibleRows =
+    draft.kind === "table"
+      ? [0, ...queryRecords(draft, query).map((r) => r.index)]
+      : [];
   const change = (r: number, c: number, value: string) =>
     patch({
       cells: cells.map((row, i) =>
@@ -122,11 +135,7 @@ export function StructuredEditor({
                     size="small"
                     disabled={rows >= 100}
                     onClick={() =>
-                      changeCells([
-                        ...cells.slice(0, cell[0] + 1),
-                        Array(cols).fill(""),
-                        ...cells.slice(cell[0] + 1),
-                      ])
+                      setDraft((d) => insertTableRow(d, cell[0] + 1))
                     }
                   >
                     + Строка
@@ -135,13 +144,7 @@ export function StructuredEditor({
                     size="small"
                     disabled={cols >= 50}
                     onClick={() =>
-                      changeCells(
-                        cells.map((r) => [
-                          ...r.slice(0, cell[1] + 1),
-                          "",
-                          ...r.slice(cell[1] + 1),
-                        ]),
-                      )
+                      setDraft((d) => insertTableColumn(d, cell[1] + 1))
                     }
                   >
                     + Столбец
@@ -150,7 +153,7 @@ export function StructuredEditor({
                     size="small"
                     disabled={rows <= 1}
                     onClick={() => {
-                      changeCells(cells.filter((_, i) => i !== cell[0]));
+                      setDraft((d) => deleteTableAxis(d, "row", cell[0]));
                       setCell([Math.min(cell[0], rows - 2), cell[1]]);
                     }}
                   >
@@ -160,9 +163,7 @@ export function StructuredEditor({
                     size="small"
                     disabled={cols <= 1}
                     onClick={() => {
-                      changeCells(
-                        cells.map((r) => r.filter((_, i) => i !== cell[1])),
-                      );
+                      setDraft((d) => deleteTableAxis(d, "column", cell[1]));
                       setCell([cell[0], Math.min(cell[1], cols - 2)]);
                     }}
                   >
@@ -192,16 +193,25 @@ export function StructuredEditor({
                 >
                   <table className="editable-table">
                     <tbody>
-                      {cells.map((row, r) => (
-                        <tr key={r}>
-                          {row.map((value, c) => (
+                      {visibleRows.map((r) => (
+                        <tr key={grid.rows[r]}>
+                          {cells[r].map((value, c) => (
                             <td
-                              key={c}
+                              key={grid.columns[c].id}
                               className={r === 0 ? "table-header" : ""}
                             >
                               <textarea
                                 aria-label={`Ячейка ${r + 1}, ${c + 1}`}
                                 value={value}
+                                aria-invalid={
+                                  r > 0 &&
+                                  !!typedValue(value, grid.columns[c]).error
+                                }
+                                title={
+                                  r > 0
+                                    ? typedValue(value, grid.columns[c]).error
+                                    : undefined
+                                }
                                 maxLength={10000}
                                 onFocus={() => setCell([r, c])}
                                 onChange={(e) => change(r, c, e.target.value)}
@@ -214,10 +224,7 @@ export function StructuredEditor({
                                     rows < 100
                                   ) {
                                     e.preventDefault();
-                                    changeCells([
-                                      ...cells,
-                                      Array(cols).fill(""),
-                                    ]);
+                                    setDraft((d) => insertTableRow(d, rows));
                                     setCell([rows, 0]);
                                     requestAnimationFrame(() =>
                                       document
@@ -236,6 +243,14 @@ export function StructuredEditor({
                     </tbody>
                   </table>
                 </div>
+                <DataControls
+                  element={draft}
+                  column={Math.min(cell[1], cols - 1)}
+                  query={query}
+                  onQuery={setQuery}
+                  onChange={setDraft}
+                  onError={setError}
+                />
               </>
             )}
             {!isLink && draft.kind === "task" && draft.task && (
@@ -355,6 +370,11 @@ export function StructuredEditor({
                 >
                   Добавить пункт
                 </Button>
+                <TaskDetails
+                  element={draft}
+                  elements={editor.elements}
+                  onChange={setDraft}
+                />
               </>
             )}
             {isLink && (

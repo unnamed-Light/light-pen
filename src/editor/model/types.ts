@@ -21,7 +21,26 @@ export interface LocalLink {
 export interface TaskData {
   status: "todo" | "doing" | "done";
   due?: string;
+  start?: string;
+  description?: string;
+  priority?: "none" | "low" | "normal" | "high" | "urgent";
+  estimate?: number;
+  tags?: string[];
+  dependencies?: string[];
+  archived?: boolean;
   items: { id: string; text: string; done: boolean }[];
+}
+export type FieldType =
+  "text" | "number" | "date" | "checkbox" | "select" | "url";
+export interface TableColumn {
+  id: string;
+  type: FieldType;
+  options?: string[];
+}
+/** Includes the header row. Identities survive insertion, deletion and reordering. */
+export interface TableGrid {
+  rows: string[];
+  columns: TableColumn[];
 }
 export type Binding = {
   elementId: string;
@@ -81,6 +100,7 @@ export interface SceneElement {
   italic?: boolean;
   textAlign?: "left" | "center" | "right";
   groupId?: string;
+  groupPath?: string[];
   locked?: boolean;
   startBinding?: Binding;
   endBinding?: Binding;
@@ -92,12 +112,13 @@ export interface SceneElement {
   label?: string;
   route?: Vec[];
   cells?: string[][];
+  grid?: TableGrid;
   task?: TaskData;
   link?: LocalLink;
   slideOrder?: number;
 }
 export interface BoardDocument {
-  schemaVersion: 1 | 2 | 3;
+  schemaVersion: 1 | 2 | 3 | 4;
   id: string;
   title: string;
   revision: number;
@@ -160,7 +181,7 @@ export const uid = () => crypto.randomUUID();
 export function createDocument(title = "Без названия"): BoardDocument {
   const now = new Date().toISOString();
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: uid(),
     title,
     revision: 0,
@@ -227,12 +248,13 @@ const isNumber = (v: unknown): v is number =>
   typeof v === "number" && Number.isFinite(v) && Math.abs(v) <= 1e9;
 const isColor = (v: unknown): v is string =>
   typeof v === "string" && /^(#[0-9a-f]{6}|transparent)$/i.test(v);
+const utf8 = new TextEncoder();
 
 export function validateDocument(value: unknown): BoardDocument {
   if (!value || typeof value !== "object")
     throw new Error("Файл не содержит доску Light Pen.");
   const doc = value as BoardDocument;
-  if (![1, 2, 3].includes(doc.schemaVersion))
+  if (![1, 2, 3, 4].includes(doc.schemaVersion))
     throw new Error("Эта версия файла не поддерживается. Обновите Light Pen.");
   if (
     typeof doc.id !== "string" ||
@@ -255,6 +277,8 @@ export function validateDocument(value: unknown): BoardDocument {
       typeof el !== "object" ||
       typeof el.id !== "string" ||
       !el.id ||
+      el.id.length > 128 ||
+      utf8.encode(el.id).length > 128 ||
       ids.has(el.id) ||
       !kinds.has(el.kind) ||
       ![el.x, el.y, el.width, el.height, el.strokeWidth, el.opacity].every(
@@ -274,6 +298,19 @@ export function validateDocument(value: unknown): BoardDocument {
     )
       throw new Error("В документе есть повреждённый объект.");
     ids.add(el.id);
+    if (
+      el.groupPath !== undefined &&
+      (!Array.isArray(el.groupPath) ||
+        el.groupPath.length < 1 ||
+        el.groupPath.length > 32 ||
+        new Set(el.groupPath).size !== el.groupPath.length ||
+        el.groupPath.some(
+          (id) => typeof id !== "string" || !/^[a-z\d_-]{1,128}$/i.test(id),
+        ) ||
+        el.groupId !== el.groupPath[0] ||
+        doc.schemaVersion < 4)
+    )
+      throw new Error("Повреждена вложенная группа.");
     if (
       el.fontSize !== undefined &&
       (!isNumber(el.fontSize) || el.fontSize < 8 || el.fontSize > 256)
@@ -317,9 +354,10 @@ export function validateDocument(value: unknown): BoardDocument {
       el.kind === "table" &&
       (!Array.isArray(el.cells) ||
         !el.cells.length ||
-        el.cells.length > 100 ||
+        el.cells.length > 1000 ||
         !el.cells[0]?.length ||
-        el.cells[0].length > 50 ||
+        el.cells[0].length > 200 ||
+        el.cells.length * el.cells[0].length > 50_000 ||
         el.cells.some(
           (row) =>
             !Array.isArray(row) ||
@@ -327,7 +365,42 @@ export function validateDocument(value: unknown): BoardDocument {
             row.some((c) => typeof c !== "string" || c.length > 10000),
         ))
     )
-      throw new Error("Повреждена таблица (до 100 строк и 50 столбцов).");
+      throw new Error(
+        "Повреждена таблица (до 1000 строк, 200 столбцов и 50 000 ячеек).",
+      );
+    if (el.grid !== undefined) {
+      const validId = (id: unknown) =>
+        typeof id === "string" && /^[a-z\d_-]{1,128}$/i.test(id);
+      const grid = el.grid;
+      if (
+        el.kind !== "table" ||
+        doc.schemaVersion < 4 ||
+        !grid ||
+        !Array.isArray(grid.rows) ||
+        grid.rows.length !== el.cells!.length ||
+        grid.rows.some((id) => !validId(id)) ||
+        new Set(grid.rows).size !== grid.rows.length ||
+        !Array.isArray(grid.columns) ||
+        grid.columns.length !== el.cells![0].length ||
+        new Set(grid.columns.map((c) => c?.id)).size !== grid.columns.length ||
+        grid.columns.some(
+          (c) =>
+            !c ||
+            !validId(c.id) ||
+            !["text", "number", "date", "checkbox", "select", "url"].includes(
+              c.type,
+            ) ||
+            (c.options !== undefined &&
+              (!Array.isArray(c.options) ||
+                c.options.length > 100 ||
+                new Set(c.options).size !== c.options.length ||
+                c.options.some(
+                  (o) => typeof o !== "string" || o.length > 250,
+                ))),
+        )
+      )
+        throw new Error("Повреждены идентификаторы или типы полей таблицы.");
+    }
     if (
       el.kind === "task" &&
       (!el.task ||
@@ -335,7 +408,7 @@ export function validateDocument(value: unknown): BoardDocument {
         (el.task.due !== undefined &&
           !/^\d{4}-\d{2}-\d{2}$/.test(el.task.due)) ||
         !Array.isArray(el.task.items) ||
-        el.task.items.length > 100 ||
+        el.task.items.length > 1000 ||
         new Set(el.task.items.map((i) => i?.id)).size !==
           el.task.items.length ||
         el.task.items.some(
@@ -349,6 +422,58 @@ export function validateDocument(value: unknown): BoardDocument {
         ))
     )
       throw new Error("Повреждена карточка задачи.");
+    if (el.kind === "task" && el.task) {
+      const task = el.task;
+      if (
+        (task.start !== undefined && !isDate(task.start)) ||
+        (task.due !== undefined && !isDate(task.due)) ||
+        (task.description !== undefined &&
+          (typeof task.description !== "string" ||
+            task.description.length > 100_000)) ||
+        (task.priority !== undefined &&
+          !["none", "low", "normal", "high", "urgent"].includes(
+            task.priority,
+          )) ||
+        (task.estimate !== undefined &&
+          (!Number.isFinite(task.estimate) ||
+            task.estimate < 0 ||
+            task.estimate > 1_000_000)) ||
+        (task.archived !== undefined && typeof task.archived !== "boolean") ||
+        (task.tags !== undefined &&
+          (!Array.isArray(task.tags) ||
+            task.tags.length > 1000 ||
+            new Set(task.tags).size !== task.tags.length ||
+            task.tags.some(
+              (t) => typeof t !== "string" || !t || t.length > 100,
+            ))) ||
+        (task.dependencies !== undefined &&
+          (!Array.isArray(task.dependencies) ||
+            task.dependencies.length > 1000 ||
+            new Set(task.dependencies).size !== task.dependencies.length ||
+            task.dependencies.some(
+              (id) =>
+                typeof id !== "string" ||
+                !id ||
+                utf8.encode(id).length > 128 ||
+                id === el.id,
+            ))) ||
+        task.items.some((i) => utf8.encode(i.id).length > 128)
+      )
+        throw new Error("Повреждены дополнительные поля задачи.");
+      if (
+        doc.schemaVersion < 4 &&
+        [
+          "start",
+          "description",
+          "priority",
+          "estimate",
+          "tags",
+          "dependencies",
+          "archived",
+        ].some((key) => key in task)
+      )
+        throw new Error("Для расширенной задачи требуется формат 4.");
+    }
     if (el.kind === "link" && !el.link)
       throw new Error("У ссылки нет назначения.");
     if (
@@ -430,9 +555,18 @@ export function validateDocument(value: unknown): BoardDocument {
     if (
       el.kind === "image" &&
       (typeof el.dataUrl !== "string" ||
-        !/^data:image\/(png|jpeg|webp);base64,[a-z\d+/=]+$/i.test(el.dataUrl))
+        !/^data:image\/(png|jpeg|webp);base64,[A-Za-z\d+/=]+$/.test(el.dataUrl))
     )
       throw new Error("Неподдерживаемое изображение.");
   }
   return doc;
+}
+
+export function isDate(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value))
+    return false;
+  const date = new Date(value + "T00:00:00Z");
+  return (
+    Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value
+  );
 }

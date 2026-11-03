@@ -1982,17 +1982,19 @@ dependencies = [
 
 [[package]]
 name = "light-pen"
-version = "0.3.0-beta.1"
+version = "0.4.0-beta.1"
 dependencies = [
  "base64 0.22.1",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-single-instance",
  "tempfile",
+ "url",
  "webview2-com",
  "windows-core",
 ]

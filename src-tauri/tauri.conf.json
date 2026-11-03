@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Light Pen",
-  "version": "0.3.0-beta.1",
+  "version": "0.4.0-beta.1",
   "identifier": "app.lightpen.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -10,31 +10,57 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{
-      "label": "main",
-      "title": "Light Pen",
-      "width": 1440,
-      "height": 960,
-      "minWidth": 800,
-      "minHeight": 560,
-      "center": true,
-      "backgroundColor": "#f3f3f3",
-      "dragDropEnabled": false
-    }],
+    "windows": [
+      {
+        "label": "main",
+        "title": "Light Pen",
+        "width": 1440,
+        "height": 960,
+        "minWidth": 800,
+        "minHeight": 560,
+        "center": true,
+        "backgroundColor": "#f3f3f3",
+        "dragDropEnabled": false
+      }
+    ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost; font-src 'self' data:; object-src 'none'; base-uri 'self'"
+      "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost https: wss: http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:*; font-src 'self' data:; object-src 'none'; base-uri 'self'"
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "shortDescription": "Локальная доска для идей",
     "category": "Productivity",
-    "fileAssociations": [{ "ext": ["lightpen"], "name": "Доска Light Pen", "description": "Локальная интерактивная доска", "role": "Editor" }],
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
+    "fileAssociations": [
+      {
+        "ext": [
+          "lightpen"
+        ],
+        "name": "Доска Light Pen",
+        "description": "Локальная интерактивная доска",
+        "role": "Editor"
+      }
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
     "windows": {
-      "nsis": { "languages": ["Russian", "English"], "displayLanguageSelector": false },
-      "webviewInstallMode": { "type": "downloadBootstrapper" }
+      "nsis": {
+        "languages": [
+          "Russian",
+          "English"
+        ],
+        "displayLanguageSelector": false
+      },
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
     }
   }
 }

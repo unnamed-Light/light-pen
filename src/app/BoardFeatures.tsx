@@ -66,7 +66,7 @@ export function BoardFeatures({
     return q
       ? editor.elements
           .filter((e) =>
-            `${e.name ?? ""} ${e.text ?? ""} ${e.label ?? ""} ${e.cells?.flat().join(" ") ?? ""} ${e.task?.items.map((i) => i.text).join(" ") ?? ""}`
+            `${e.name ?? ""} ${e.text ?? ""} ${e.label ?? ""} ${e.cells?.flat().join(" ") ?? ""} ${e.task?.description ?? ""} ${e.task?.tags?.join(" ") ?? ""} ${e.task?.items.map((i) => i.text).join(" ") ?? ""}`
               .toLocaleLowerCase()
               .includes(q),
           )
@@ -371,6 +371,15 @@ export function BoardFeatures({
           >
             Группа
           </Button>
+          {editor.canEnterGroup && (
+            <Button
+              size="small"
+              appearance="subtle"
+              onClick={() => editor.enterGroup()}
+            >
+              Войти в группу
+            </Button>
+          )}
           <Menu>
             <MenuTrigger disableButtonEnhancement>
               <Button size="small" appearance="subtle" disabled={disabled}>
@@ -409,6 +418,38 @@ export function BoardFeatures({
             {editor.selection.every((e) => e.locked)
               ? "Разблокировать"
               : "Закрепить"}
+          </Button>
+        </div>
+      )}
+      {!!editor.groupScope.length && (
+        <div className="group-scope floating" aria-label="Путь группы">
+          <Button
+            size="small"
+            onClick={() => {
+              editor.groupScope = [];
+              editor.selected.clear();
+              editor.emit("ui");
+              editor.emit("overlay");
+            }}
+          >
+            Вся доска
+          </Button>
+          {editor.groupScope.map((id, i) => (
+            <Button
+              size="small"
+              key={id}
+              onClick={() => {
+                editor.groupScope = editor.groupScope.slice(0, i + 1);
+                editor.selected.clear();
+                editor.emit("ui");
+                editor.emit("overlay");
+              }}
+            >
+              Группа {i + 1}
+            </Button>
+          ))}
+          <Button size="small" onClick={() => editor.leaveGroup()}>
+            Назад · Esc
           </Button>
         </div>
       )}

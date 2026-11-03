@@ -1,4 +1,5 @@
 import { History } from "./commands/history";
+import { gridOf } from "./model/data";
 import { bindingAt, copyElements, resolveBindings } from "./model/relations";
 import {
   bounds,
@@ -98,6 +99,7 @@ export class Editor {
   tool: Tool = "pen";
   style: PaintStyle = { ...DEFAULT_STYLE };
   selected = new Set<string>();
+  groupScope: string[] = [];
   history = new History();
   gesture: Gesture | null = null;
   editing: EditingText | null = null;
@@ -105,6 +107,9 @@ export class Editor {
   spaceHeld = false;
   grid = true;
   enabled = true;
+  readOnly = false;
+  beforeClose: (() => Promise<void>) | null = null;
+  reportError: ((message: string) => void) | null = null;
   contextMenu: Vec | null = null;
   formulaDraft: SceneElement | null = null;
   objectDraft: SceneElement | null = null;
@@ -146,6 +151,7 @@ export class Editor {
   private listeners = new Set<(signal: Signal) => void>();
   private clipboard: SceneElement[] = [];
   private uiVersion = 0;
+  private cameraVersion = 0;
   private lastReplayUi = 0;
   subscribe = (fn: (signal: Signal) => void) => {
     this.listeners.add(fn);
@@ -155,11 +161,17 @@ export class Editor {
   };
   subscribeUi = (fn: () => void) =>
     this.subscribe((s) => {
-      if (s !== "overlay") fn();
+      if (s !== "overlay" && s !== "camera") fn();
     });
+  subscribeCamera = (fn: () => void) =>
+    this.subscribe((s) => {
+      if (s === "camera") fn();
+    });
+  getCameraSnapshot = () => this.cameraVersion;
   getSnapshot = () => this.uiVersion;
   emit(signal: Signal) {
-    if (signal !== "overlay") this.uiVersion++;
+    if (signal === "camera") this.cameraVersion++;
+    else if (signal !== "overlay") this.uiVersion++;
     for (const fn of this.listeners) fn(signal);
   }
   get elements() {
@@ -172,6 +184,8 @@ export class Editor {
     return (
       this.gesture !== null ||
       this.editing !== null ||
+      this.objectDraft !== null ||
+      this.formulaDraft !== null ||
       this.styleBefore !== null
     );
   }
@@ -219,6 +233,7 @@ export class Editor {
     this.document = { ...doc, elements: resolveBindings(doc.elements) };
     this.history.clear();
     this.selected.clear();
+    this.groupScope = [];
     this.camera = { x: 0, y: 0, zoom: 1 };
     this.emit("scene");
     this.fit();
@@ -226,18 +241,37 @@ export class Editor {
   private changed(elements: SceneElement[], title = this.document.title) {
     this.document = {
       ...this.document,
-      schemaVersion: 3,
+      schemaVersion: 4,
       title,
       elements: resolveBindings(elements),
       revision: this.document.revision + 1,
       updatedAt: new Date().toISOString(),
     };
-    const ids = new Set(elements.map((e) => e.id));
-    this.selected = new Set([...this.selected].filter((id) => ids.has(id)));
+    if (this.selected.size) {
+      const found = new Set<string>();
+      for (
+        let i = 0;
+        i < elements.length && found.size < this.selected.size;
+        i++
+      )
+        if (this.selected.has(elements[i].id)) found.add(elements[i].id);
+      this.selected = found;
+    }
+    this.pruneGroupScope();
     this.emit("document");
   }
   commit(elements: SceneElement[], label: string, title?: string) {
+    if (this.readOnly) return;
     this.endStyle();
+    if (this.groupScope.length) {
+      const existing = new Set(this.elements.map((e) => e.id));
+      elements = elements.map((e) => {
+        if (existing.has(e.id) || this.inGroupScope(e)) return e;
+        const path = [...this.groupScope, ...this.groupPath(e)];
+        return { ...e, groupId: path[0], groupPath: path };
+      });
+      if (elements.some((e) => (e.groupPath?.length ?? 0) > 32)) return;
+    }
     this.history.push(
       this.elements,
       elements,
@@ -248,6 +282,7 @@ export class Editor {
     this.changed(elements, title);
   }
   rename(title: string) {
+    if (this.readOnly) return;
     const clean = title.trim().slice(0, 250) || "Без названия";
     if (clean !== this.document.title) {
       this.document = {
@@ -274,6 +309,7 @@ export class Editor {
     if (e) this.changed(e, this.history.restoredTitle);
   }
   setTool(tool: Tool) {
+    if (this.readOnly && tool !== "select" && tool !== "hand") return;
     this.endStyle();
     this.commitText();
     this.cancelGesture();
@@ -284,6 +320,7 @@ export class Editor {
     this.emit("ui");
   }
   setStyle(patch: Partial<PaintStyle>, apply = true) {
+    if (this.readOnly) apply = false;
     this.style = { ...this.style, ...patch };
     if (apply && this.selected.size) {
       const els = this.elements.map((e) =>
@@ -327,7 +364,9 @@ export class Editor {
   }
   selectAll() {
     this.selected = new Set(
-      this.elements.filter((e) => !e.locked && !e.hidden).map((e) => e.id),
+      this.elements
+        .filter((e) => this.inGroupScope(e) && !e.locked && !e.hidden)
+        .map((e) => e.id),
     );
     this.emit("ui");
     this.emit("overlay");
@@ -390,6 +429,7 @@ export class Editor {
     return next;
   }
   beginStyle() {
+    if (this.readOnly) return;
     if (!this.styleBefore) {
       this.commitText();
       this.styleBefore = this.elements;
@@ -405,9 +445,52 @@ export class Editor {
     this.commit(after, "Свойства");
   }
   private groupMembers(el: SceneElement) {
-    return el.groupId
-      ? this.elements.filter((e) => e.groupId === el.groupId && !e.locked)
+    const key = this.groupKey(el);
+    return key
+      ? this.elements.filter(
+          (e) => this.inGroupScope(e) && this.groupKey(e) === key && !e.locked,
+        )
       : [el];
+  }
+  groupPath(el: SceneElement) {
+    return el.groupPath ?? (el.groupId ? [el.groupId] : []);
+  }
+  private groupKey(el: SceneElement) {
+    return this.groupPath(el)[this.groupScope.length];
+  }
+  private inGroupScope(el: SceneElement) {
+    const path = this.groupPath(el);
+    return this.groupScope.every((id, i) => path[i] === id);
+  }
+  pruneGroupScope() {
+    while (
+      this.groupScope.length &&
+      !this.elements.some((e) => this.inGroupScope(e))
+    )
+      this.groupScope.pop();
+  }
+  get canEnterGroup() {
+    const key = this.selection[0] && this.groupKey(this.selection[0]);
+    return !!key && this.selection.every((e) => this.groupKey(e) === key);
+  }
+  enterGroup() {
+    if (!this.canEnterGroup) return;
+    this.groupScope.push(this.groupKey(this.selection[0]));
+    this.selected.clear();
+    this.emit("ui");
+    this.emit("overlay");
+  }
+  leaveGroup() {
+    const old = [...this.groupScope];
+    if (!old.length) return;
+    this.groupScope.pop();
+    this.selected = new Set(
+      this.elements
+        .filter((e) => old.every((id, i) => this.groupPath(e)[i] === id))
+        .map((e) => e.id),
+    );
+    this.emit("ui");
+    this.emit("overlay");
   }
   private moveMembers() {
     const selected = this.selection.filter((e) => !e.locked),
@@ -449,10 +532,19 @@ export class Editor {
   group() {
     const picked = this.selection.filter((e) => !e.locked);
     if (picked.length < 2) return;
+    if (picked.some((e) => this.groupPath(e).length >= 32)) return;
     const id = uid(),
       ids = new Set(picked.map((e) => e.id));
     this.commit(
-      this.elements.map((e) => (ids.has(e.id) ? { ...e, groupId: id } : e)),
+      this.elements.map((e) => {
+        if (!ids.has(e.id)) return e;
+        const path = [
+          ...this.groupScope,
+          id,
+          ...this.groupPath(e).slice(this.groupScope.length),
+        ];
+        return { ...e, groupId: path[0], groupPath: path };
+      }),
       "Группа",
     );
   }
@@ -460,14 +552,22 @@ export class Editor {
     const groups = new Set(
       this.selection
         .filter((e) => !e.locked)
-        .map((e) => e.groupId)
+        .map((e) => this.groupKey(e))
         .filter(Boolean),
     );
     if (!groups.size) return;
     this.commit(
-      this.elements.map((e) =>
-        groups.has(e.groupId) ? { ...e, groupId: undefined } : e,
-      ),
+      this.elements.map((e) => {
+        if (!this.inGroupScope(e) || !groups.has(this.groupKey(e))) return e;
+        const path = this.groupPath(e).filter(
+          (_, i) => i !== this.groupScope.length,
+        );
+        return {
+          ...e,
+          groupId: path[0],
+          groupPath: path.length ? path : undefined,
+        };
+      }),
       "Разгруппировка",
     );
   }
@@ -732,6 +832,7 @@ export class Editor {
         ["", "", ""],
         ["", "", ""],
       ];
+    if (kind === "table") element.grid = gridOf(element);
     if (kind === "task")
       element.task = {
         status: "todo",
@@ -742,6 +843,8 @@ export class Editor {
     this.emit("ui");
   }
   saveObjectDraft(element: SceneElement) {
+    if (element.kind === "table" && !element.grid)
+      element = { ...element, grid: gridOf(element) };
     const exists = this.elements.some((e) => e.id === element.id);
     this.objectDraft = null;
     this.selected = new Set([element.id]);
@@ -898,7 +1001,12 @@ export class Editor {
     const t = 6 / this.camera.zoom;
     for (let i = this.elements.length - 1; i >= 0; i--) {
       const e = this.elements[i];
-      if (!e.hidden && (includeLocked || !e.locked) && hitTest(e, p, t))
+      if (
+        this.inGroupScope(e) &&
+        !e.hidden &&
+        (includeLocked || !e.locked) &&
+        hitTest(e, p, t)
+      )
         return e;
     }
     return null;
@@ -945,8 +1053,11 @@ export class Editor {
       };
       return true;
     }
-    const tool =
-      sample.pointerType === "pen" && button === 5 ? "eraser" : this.tool;
+    const tool = this.readOnly
+      ? "select"
+      : sample.pointerType === "pen" && button === 5
+        ? "eraser"
+        : this.tool;
     if (tool === "pen" || tool === "highlighter") {
       const el = createElement("stroke", p.x, p.y, {
         ...this.style,
@@ -1329,18 +1440,21 @@ export class Editor {
       const r = rectFromPoints(g.start, p);
       const hits = this.elements.filter(
           (e) =>
+            this.inGroupScope(e) &&
             !e.hidden &&
             !e.locked &&
             (g.previous.has(e.id) || intersects(bounds(e), r)),
         ),
         ids = new Set(hits.map((e) => e.id)),
-        groups = new Set(hits.map((e) => e.groupId).filter(Boolean));
+        groups = new Set(hits.map((e) => this.groupKey(e)).filter(Boolean));
       this.selected = new Set(
         this.elements
           .filter(
             (e) =>
               !e.locked &&
-              (ids.has(e.id) || (e.groupId && groups.has(e.groupId))),
+              this.inGroupScope(e) &&
+              (ids.has(e.id) ||
+                (this.groupKey(e) && groups.has(this.groupKey(e)))),
           )
           .map((e) => e.id),
       );
@@ -1360,6 +1474,7 @@ export class Editor {
     for (const el of this.elements)
       if (
         !g.erased.has(el.id) &&
+        this.inGroupScope(el) &&
         !el.locked &&
         !el.hidden &&
         sweepHitTest(el, from, p, this.eraserSize / 2 / this.camera.zoom)
@@ -1447,6 +1562,12 @@ export class Editor {
   doubleClick(screen: Vec) {
     if (this.replay) return;
     const el = this.pick(screenToWorld(screen, this.camera));
+    if (el && this.groupKey(el)) {
+      this.selected = new Set(this.groupMembers(el).map((e) => e.id));
+      this.enterGroup();
+      return;
+    }
+    if (this.readOnly) return;
     if (el && ["table", "task", "link"].includes(el.kind)) {
       this.cancelGesture();
       this.objectDraftMode = "content";

@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Button, Tooltip } from "@fluentui/react-components";
 import {
   Map20Regular,
   Dismiss20Regular,
   Previous20Regular,
   Next20Regular,
+  ZoomIn20Regular,
+  ZoomOut20Regular,
+  FullScreenMaximize20Regular,
 } from "@fluentui/react-icons";
 import type { Editor } from "../editor/editor";
 import type { Camera, Vec } from "../editor/model/types";
@@ -226,6 +229,46 @@ export function Minimap({ editor }: { editor: Editor }) {
     </div>
   );
 }
+
+export function ZoomControls({ editor }: { editor: Editor }) {
+  useSyncExternalStore(editor.subscribeCamera, editor.getCameraSnapshot);
+  return (
+    <div className="zoom-controls floating">
+      <Tooltip content="Уменьшить" relationship="label">
+        <Button
+          appearance="subtle"
+          icon={<ZoomOut20Regular />}
+          aria-label="Уменьшить"
+          onClick={() => editor.zoom(1 / 1.2)}
+        />
+      </Tooltip>
+      <button
+        className="zoom-value"
+        aria-label="Масштаб 100%"
+        onClick={() => editor.zoom(1 / editor.camera.zoom)}
+      >
+        {Math.round(editor.camera.zoom * 100)}%
+      </button>
+      <Tooltip content="Увеличить" relationship="label">
+        <Button
+          appearance="subtle"
+          icon={<ZoomIn20Regular />}
+          aria-label="Увеличить"
+          onClick={() => editor.zoom(1.2)}
+        />
+      </Tooltip>
+      <div className="zoom-divider" />
+      <Tooltip content="Показать всю доску · Shift+1" relationship="label">
+        <Button
+          appearance="subtle"
+          icon={<FullScreenMaximize20Regular />}
+          aria-label="Показать всю доску"
+          onClick={() => editor.fit()}
+        />
+      </Tooltip>
+    </div>
+  );
+}
 export function Presentation({
   editor,
   onClose,
@@ -240,6 +283,7 @@ export function Presentation({
     [strokes, setStrokes] = useState<Vec[][]>([]),
     [active, setActive] = useState<Vec[]>([]),
     previous = useRef<Camera>({ ...editor.camera });
+  useSyncExternalStore(editor.subscribeCamera, editor.getCameraSnapshot);
   const change = (i: number) => {
     const next = Math.max(0, Math.min(slides.length - 1, i));
     setIndex(next);

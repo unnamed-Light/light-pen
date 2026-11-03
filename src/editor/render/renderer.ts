@@ -460,8 +460,16 @@ export class BoardRenderer {
         Math.min(el.height, el.fontSize ?? 18) * 0.6,
       );
     } else {
+      const tiny =
+        Math.min(el.width, el.height) * this.editor.camera.zoom <= 12 &&
+        el.strokeWidth * this.editor.camera.zoom < 0.45;
+      if (tiny && (el.fill === "#ffffff" || el.fill === "transparent")) {
+        ctx.fillStyle = this.inkColor(el, this.dark);
+        ctx.globalAlpha *= 0.22;
+      }
       ctx.fillRect(el.x, el.y, el.width, el.height);
-      if (el.kind !== "sticky") ctx.strokeRect(el.x, el.y, el.width, el.height);
+      if (el.kind !== "sticky" && !tiny)
+        ctx.strokeRect(el.x, el.y, el.width, el.height);
       if (Math.min(el.width, el.height) * this.editor.camera.zoom > 12) {
         ctx.globalAlpha *= 0.22;
         ctx.fillStyle = this.inkColor(el, this.dark);

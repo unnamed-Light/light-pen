@@ -23,3 +23,12 @@ Thumbs.db
 *.pem
 *.key
 *.pfx
+/server-data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-wal
+*.db-shm
+/server/.env
+*.dpapi

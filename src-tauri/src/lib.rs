@@ -1,3 +1,5 @@
+mod credentials;
+mod local_links;
 mod storage;
 
 use base64::Engine;
@@ -7,6 +9,54 @@ use std::{
 };
 use storage::BoardDocument;
 use tauri::{Emitter, Manager, State};
+
+// Tests use an isolated local profile while exercising the actual shipped binary.
+// Normal launches retain the existing desktop profile and recovery behavior.
+fn selected_profile(value: Option<std::ffi::OsString>) -> Result<Option<PathBuf>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(value);
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(
+            "Профиль должен иметь полный локальный путь без переходов к родительским папкам."
+                .into(),
+        );
+    }
+    #[cfg(windows)]
+    if !matches!(path.components().next(),Some(std::path::Component::Prefix(p)) if matches!(p.kind(),std::path::Prefix::Disk(_)|std::path::Prefix::VerbatimDisk(_)))
+    {
+        return Err("Профиль должен находиться на локальном диске.".into());
+    }
+    Ok(Some(path))
+}
+fn data_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    if let Some(path) = selected_profile(std::env::var_os("LIGHT_PEN_PROFILE_DIR"))? {
+        return Ok(path);
+    }
+    app.path().app_data_dir().map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+    #[test]
+    fn profile_override_rejects_relative_or_parent_paths_and_defaults_without_touching_files() {
+        assert!(selected_profile(None).unwrap().is_none());
+        assert!(selected_profile(Some("relative".into())).is_err());
+        let root = tempfile::tempdir().unwrap();
+        assert!(selected_profile(Some(root.path().as_os_str().to_owned()))
+            .unwrap()
+            .is_some());
+        assert!(
+            selected_profile(Some(root.path().join("..").join("other").into_os_string())).is_err()
+        );
+    }
+}
 
 #[derive(Default)]
 struct StorageState {
@@ -24,13 +74,35 @@ fn startup_path() -> Option<String> {
 }
 
 #[tauri::command]
+async fn load_credentials(app: tauri::AppHandle) -> Result<credentials::Credentials, String> {
+    let root = data_root(&app)?;
+    tauri::async_runtime::spawn_blocking(move || credentials::load(&root))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn save_credentials(
+    app: tauri::AppHandle,
+    state: State<'_, StorageState>,
+    credentials: credentials::Credentials,
+) -> Result<(), String> {
+    let root = data_root(&app)?;
+    let lock = state.write_lock.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = lock.lock().map_err(|_| "Хранилище занято после ошибки.")?;
+        credentials::save(&root, &credentials)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
 async fn persist_document(
     app: tauri::AppHandle,
     state: State<'_, StorageState>,
     document: BoardDocument,
     path: Option<String>,
 ) -> Result<u64, String> {
-    let root = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let root = data_root(&app)?;
     let lock = state.write_lock.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = lock.lock().map_err(|_| "Хранилище занято после ошибки.")?;
@@ -52,7 +124,7 @@ async fn open_document(path: String) -> Result<BoardDocument, String> {
 
 #[tauri::command]
 async fn restore_session(app: tauri::AppHandle) -> Result<storage::Recovery, String> {
-    let root = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let root = data_root(&app)?;
     tauri::async_runtime::spawn_blocking(move || storage::restore_session(&root))
         .await
         .map_err(|e| e.to_string())?
@@ -62,7 +134,7 @@ async fn restore_session(app: tauri::AppHandle) -> Result<storage::Recovery, Str
 async fn list_recent_documents(
     app: tauri::AppHandle,
 ) -> Result<Vec<storage::RecentDocument>, String> {
-    let root = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let root = data_root(&app)?;
     tauri::async_runtime::spawn_blocking(move || storage::recent_documents(&root))
         .await
         .map_err(|e| e.to_string())?
@@ -73,7 +145,7 @@ async fn open_recent_document(
     app: tauri::AppHandle,
     id: String,
 ) -> Result<storage::Recovery, String> {
-    let root = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let root = data_root(&app)?;
     tauri::async_runtime::spawn_blocking(move || storage::open_draft(&root, &id))
         .await
         .map_err(|e| e.to_string())?
@@ -105,7 +177,7 @@ async fn list_versions(
     app: tauri::AppHandle,
     id: String,
 ) -> Result<Vec<storage::DocumentVersion>, String> {
-    let root = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let root = data_root(&app)?;
     tauri::async_runtime::spawn_blocking(move || storage::list_versions(&root, &id))
         .await
         .map_err(|e| e.to_string())?
@@ -116,7 +188,7 @@ async fn create_checkpoint(
     state: State<'_, StorageState>,
     document: BoardDocument,
 ) -> Result<(), String> {
-    let root = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let root = data_root(&app)?;
     let lock = state.write_lock.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = lock.lock().map_err(|e| e.to_string())?;
@@ -131,7 +203,7 @@ async fn read_version(
     id: String,
     version: String,
 ) -> Result<BoardDocument, String> {
-    let root = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let root = data_root(&app)?;
     tauri::async_runtime::spawn_blocking(move || storage::read_version(&root, &id, &version))
         .await
         .map_err(|e| e.to_string())?
@@ -139,14 +211,14 @@ async fn read_version(
 
 #[tauri::command]
 async fn list_templates(app: tauri::AppHandle) -> Result<Vec<storage::TemplateSummary>, String> {
-    let root = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let root = data_root(&app)?;
     tauri::async_runtime::spawn_blocking(move || storage::templates(&root))
         .await
         .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 async fn read_template(app: tauri::AppHandle, id: String) -> Result<BoardDocument, String> {
-    let root = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let root = data_root(&app)?;
     tauri::async_runtime::spawn_blocking(move || storage::read_template(&root, &id))
         .await
         .map_err(|e| e.to_string())?
@@ -157,7 +229,7 @@ async fn save_template(
     state: State<'_, StorageState>,
     document: BoardDocument,
 ) -> Result<(), String> {
-    let root = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let root = data_root(&app)?;
     let lock = state.write_lock.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = lock.lock().map_err(|e| e.to_string())?;
@@ -168,7 +240,7 @@ async fn save_template(
 }
 #[tauri::command]
 async fn remove_template(app: tauri::AppHandle, id: String) -> Result<(), String> {
-    let root = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let root = data_root(&app)?;
     tauri::async_runtime::spawn_blocking(move || storage::remove_template(&root, &id))
         .await
         .map_err(|e| e.to_string())?
@@ -177,6 +249,22 @@ async fn remove_template(app: tauri::AppHandle, id: String) -> Result<(), String
 async fn export_template(path: String, document: BoardDocument) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         storage::atomic_save(&PathBuf::from(path), &document, None)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn export_text(path: String, data: String, format: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if !["csv", "tsv", "md", "json", "opml"].contains(&format.as_str())
+            || PathBuf::from(&path).extension().and_then(|v| v.to_str()) != Some(format.as_str())
+        {
+            return Err("Неподдерживаемый формат текста.".into());
+        }
+        if data.len() > 8 * 1024 * 1024 {
+            return Err("Текстовый экспорт превышает 8 МБ.".into());
+        }
+        storage::atomic_bytes(&PathBuf::from(path), data.as_bytes())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -211,11 +299,13 @@ async fn export_vector(path: String, data: String, format: String) -> Result<(),
 #[tauri::command]
 async fn open_local_file(path: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
+        local_links::validate_local_document(std::path::Path::new(&path))?;
         let target = std::fs::canonicalize(&path)
             .map_err(|_| "Файл по ссылке не найден. Возможно, он был перемещён.")?;
         if !target.is_file() {
             return Err("Выберите локальный файл.".into());
         }
+        local_links::validate_local_document(&target)?;
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -300,7 +390,10 @@ pub fn run() {
             remove_template,
             export_template,
             export_vector,
-            open_local_file
+            export_text,
+            open_local_file,
+            load_credentials,
+            save_credentials
         ])
         .run(tauri::generate_context!())
         .expect("Light Pen could not start");

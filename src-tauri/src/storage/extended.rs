@@ -1,6 +1,30 @@
 use super::*;
 
 pub fn validate_extra(el: &Value, kind: &str) -> Result<(), String> {
+    if let Some(path) = el.get("groupPath") {
+        let path = path
+            .as_array()
+            .filter(|p| !p.is_empty() && p.len() <= 32)
+            .ok_or("Повреждена вложенная группа.")?;
+        let mut seen = HashSet::new();
+        for id in path {
+            let id = id
+                .as_str()
+                .filter(|s| {
+                    !s.is_empty()
+                        && s.len() <= 128
+                        && s.bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                })
+                .ok_or("Повреждена группа.")?;
+            if !seen.insert(id) {
+                return Err("Цикл в группе.".into());
+            }
+        }
+        if el.get("groupId") != path.first() {
+            return Err("Повреждён корень группы.".into());
+        }
+    }
     if el.get("fontSize").is_some() && !(8.0..=256.0).contains(&numeric(el, "fontSize")?) {
         return Err("Повреждён размер текста.".into());
     }
@@ -61,11 +85,11 @@ pub fn validate_extra(el: &Value, kind: &str) -> Result<(), String> {
         let rows = el
             .get("cells")
             .and_then(Value::as_array)
-            .filter(|a| !a.is_empty() && a.len() <= 100)
+            .filter(|a| !a.is_empty() && a.len() <= 1000)
             .ok_or("Повреждена таблица.")?;
         let columns = rows[0].as_array().map_or(0, Vec::len);
-        if columns == 0 || columns > 50 {
-            return Err("В таблице должно быть 1–50 столбцов.".into());
+        if columns == 0 || columns > 200 || rows.len() * columns > 50_000 {
+            return Err("В таблице должно быть 1–200 столбцов и до 50 000 ячеек.".into());
         }
         for row in rows {
             let cells = row
@@ -106,7 +130,7 @@ pub fn validate_extra(el: &Value, kind: &str) -> Result<(), String> {
         let items = task
             .get("items")
             .and_then(Value::as_array)
-            .filter(|a| a.len() <= 100)
+            .filter(|a| a.len() <= 1000)
             .ok_or("Повреждён список задачи.")?;
         let mut ids = HashSet::new();
         for item in items {
@@ -337,5 +361,67 @@ mod tests {
         let mut doc = document();
         doc.id = "..\\outside".into();
         assert!(save_template(dir.path(), &doc).is_err());
+    }
+    #[test]
+    fn nested_groups_require_version_four_and_round_trip_without_flattening() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut doc = document();
+        doc.elements[0]["groupId"] = json!("outer");
+        doc.elements[0]["groupPath"] = json!(["outer", "inner"]);
+        assert!(validate(&doc).is_err());
+        doc.schema_version = 4;
+        validate(&doc).unwrap();
+        let path = dir.path().join("nested.lightpen");
+        atomic_save(&path, &doc, None).unwrap();
+        assert_eq!(read_document(&path).unwrap().0, doc);
+        let before = fs::read(&path).unwrap();
+        doc.elements[0]["groupPath"] = json!(["outer", "outer"]);
+        assert!(atomic_save(&path, &doc, None).is_err());
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+    #[test]
+    fn typed_rows_and_task_planning_round_trip_and_invalid_edits_preserve_saved_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.lightpen");
+        let mut doc = document();
+        doc.schema_version = 4;
+        doc.elements[0]["grid"] = json!({"rows":["header","record"],"columns":[{"id":"name","type":"text"},{"id":"price","type":"number"}]});
+        doc.elements[1]["task"] = json!({"status":"doing","start":"2024-02-29","due":"2026-11-10","description":"Описание с 日本語 и ✓","priority":"high","estimate":2.5,"tags":["План","Работа"],"dependencies":["another"],"archived":false,"items":[{"id":"one","text":"Проверить","done":true}]});
+        atomic_save(&path, &doc, None).unwrap();
+        assert_eq!(read_document(&path).unwrap().0, doc);
+        let bytes = fs::read(&path).unwrap();
+        for (index, key, value) in [
+            (
+                0,
+                "grid",
+                json!({"rows":["same","same"],"columns":[{"id":"name","type":"text"},{"id":"price","type":"number"}]}),
+            ),
+            (
+                0,
+                "grid",
+                json!({"rows":["header","row"],"columns":[{"id":"name","type":"script"},{"id":"price","type":"number"}]}),
+            ),
+        ] {
+            let mut invalid = doc.clone();
+            invalid.elements[index][key] = value;
+            assert!(atomic_save(&path, &invalid, None).is_err());
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+        }
+        for (key, value) in [
+            ("due", json!("2026-02-29")),
+            ("start", json!("2026-04-31")),
+            ("estimate", json!(-1)),
+            ("priority", json!("other")),
+            ("tags", json!(["same", "same"])),
+            ("dependencies", json!(["task"])),
+        ] {
+            let mut invalid = doc.clone();
+            invalid.elements[1]["task"][key] = value;
+            assert!(atomic_save(&path, &invalid, None).is_err(), "{key}");
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+        }
+        doc.schema_version = 3;
+        assert!(atomic_save(&path, &doc, None).is_err());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
     }
 }

@@ -2,6 +2,7 @@ use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashSet, fs, io::Write, path::Path};
+mod data;
 mod extended;
 pub use extended::{read_template, remove_template, save_template, templates, TemplateSummary};
 
@@ -37,7 +38,7 @@ fn valid_color(value: Option<&Value>) -> bool {
 }
 
 pub fn validate(doc: &BoardDocument) -> Result<(), String> {
-    if ![1, 2, 3].contains(&doc.schema_version) {
+    if ![1, 2, 3, 4].contains(&doc.schema_version) {
         return Err("Эта версия файла не поддерживается. Обновите Light Pen.".into());
     }
     if doc.id.is_empty()
@@ -67,7 +68,11 @@ pub fn validate(doc: &BoardDocument) -> Result<(), String> {
             .get("kind")
             .and_then(Value::as_str)
             .ok_or("У объекта нет типа.")?;
+        if doc.schema_version < 4 && el.get("groupPath").is_some() {
+            return Err("Для вложенных групп требуется формат 4.".into());
+        }
         extended::validate_extra(el, kind)?;
+        data::validate(el, kind, doc.schema_version)?;
         for key in ["x", "y"] {
             numeric(el, key)?;
         }
@@ -292,7 +297,7 @@ pub fn read_document(path: &Path) -> Result<(BoardDocument, Option<String>), Str
     let version: u32 = connection
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .map_err(|e| e.to_string())?;
-    if ![1, 2, 3].contains(&version) {
+    if ![1, 2, 3, 4].contains(&version) {
         return Err("Эта версия файла не поддерживается. Обновите Light Pen.".into());
     }
     let result: String = connection
