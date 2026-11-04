@@ -69,6 +69,15 @@ pub fn validate_extra(el: &Value, kind: &str) -> Result<(), String> {
             .get("path")
             .and_then(Value::as_str)
             .is_none_or(|s| s.len() > 16384 || s.chars().any(char::is_control))
+            || link.get("pageId").is_some_and(|v| {
+                v.as_str().is_none_or(|s| {
+                    s.is_empty()
+                        || s.len() > 128
+                        || !s
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                })
+            })
             || link
                 .get("elementId")
                 .is_some_and(|v| v.as_str().is_none_or(|s| s.len() > 128))
@@ -80,6 +89,39 @@ pub fn validate_extra(el: &Value, kind: &str) -> Result<(), String> {
         }
     } else if kind == "link" {
         return Err("У ссылки нет назначения.".into());
+    }
+    if let Some(widget) = el.get("widget") {
+        if kind != "rectangle"
+            || widget
+                .get("pluginId")
+                .and_then(Value::as_str)
+                .is_none_or(|s| {
+                    s.is_empty()
+                        || s.len() > 128
+                        || !s.as_bytes()[0].is_ascii_alphanumeric()
+                        || !s
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+                })
+            || widget
+                .get("type")
+                .and_then(Value::as_str)
+                .is_none_or(|s| s.is_empty() || s.len() > 128)
+            || widget
+                .get("version")
+                .and_then(Value::as_u64)
+                .is_none_or(|n| n == 0 || n > 9_007_199_254_740_991)
+            || widget
+                .get("fallback")
+                .and_then(Value::as_str)
+                .is_none_or(|s| s.chars().count() > 100_000)
+            || serde_json::to_vec(widget.get("data").unwrap_or(&Value::Null))
+                .map_err(|e| e.to_string())?
+                .len()
+                > 1_000_000
+        {
+            return Err("Повреждены данные виджета.".into());
+        }
     }
     if kind == "table" {
         let rows = el
@@ -279,6 +321,7 @@ mod tests {
         arrow["route"] = json!([{"x":0,"y":0},{"x":100,"y":0},{"x":100,"y":100},{"x":200,"y":100}]);
         BoardDocument {
             schema_version: 3,
+            pages: None,
             id: "studio-qa".into(),
             title: "Новый формат".into(),
             revision: 7,

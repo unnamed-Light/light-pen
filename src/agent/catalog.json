@@ -30,6 +30,14 @@
             },
             "maxItems": 500
           },
+          "pageId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Read another page without switching the UI"
+          },
+          "workspace": {
+            "type": "boolean"
+          },
           "search": {
             "type": "string",
             "maxLength": 10000,
@@ -173,6 +181,45 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "pageId": {
+                            "type": "string",
+                            "maxLength": 128,
+                            "description": "Containing page. For edit_batch it must be the active page."
+                          },
+                          "widget": {
+                            "type": "object",
+                            "properties": {
+                              "pluginId": {
+                                "type": "string",
+                                "maxLength": 128,
+                                "description": ""
+                              },
+                              "type": {
+                                "type": "string",
+                                "maxLength": 128,
+                                "description": ""
+                              },
+                              "version": {
+                                "type": "number",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              },
+                              "data": {},
+                              "fallback": {
+                                "type": "string",
+                                "maxLength": 100000,
+                                "description": ""
+                              }
+                            },
+                            "required": [
+                              "pluginId",
+                              "type",
+                              "version",
+                              "data",
+                              "fallback"
+                            ],
+                            "additionalProperties": false
+                          },
                           "id": {
                             "type": "string",
                             "maxLength": 128,
@@ -625,6 +672,11 @@
                                 "maxLength": 128,
                                 "description": "Target object ID"
                               },
+                              "pageId": {
+                                "type": "string",
+                                "maxLength": 128,
+                                "description": "Target page; may be on the same board or linked file"
+                              },
                               "label": {
                                 "type": "string",
                                 "maxLength": 10000,
@@ -676,6 +728,45 @@
                     "patch": {
                       "type": "object",
                       "properties": {
+                        "pageId": {
+                          "type": "string",
+                          "maxLength": 128,
+                          "description": "Containing page. For edit_batch it must be the active page."
+                        },
+                        "widget": {
+                          "type": "object",
+                          "properties": {
+                            "pluginId": {
+                              "type": "string",
+                              "maxLength": 128,
+                              "description": ""
+                            },
+                            "type": {
+                              "type": "string",
+                              "maxLength": 128,
+                              "description": ""
+                            },
+                            "version": {
+                              "type": "number",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            "data": {},
+                            "fallback": {
+                              "type": "string",
+                              "maxLength": 100000,
+                              "description": ""
+                            }
+                          },
+                          "required": [
+                            "pluginId",
+                            "type",
+                            "version",
+                            "data",
+                            "fallback"
+                          ],
+                          "additionalProperties": false
+                        },
                         "x": {
                           "type": "number",
                           "minimum": -1000000000,
@@ -1099,6 +1190,11 @@
                               "maxLength": 128,
                               "description": "Target object ID"
                             },
+                            "pageId": {
+                              "type": "string",
+                              "maxLength": 128,
+                              "description": "Target page; may be on the same board or linked file"
+                            },
                             "label": {
                               "type": "string",
                               "maxLength": 10000,
@@ -1124,6 +1220,8 @@
                       "items": {
                         "type": "string",
                         "enum": [
+                          "pageId",
+                          "widget",
                           "x",
                           "y",
                           "width",
@@ -1424,6 +1522,11 @@
               ]
             },
             "maxItems": 200
+          },
+          "pageId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Active page observed by caller. Optional for older clients; captured and checked while waiting."
           }
         },
         "required": [
@@ -1473,6 +1576,11 @@
               "undo",
               "redo"
             ]
+          },
+          "pageId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Active page observed by caller. Optional for older clients; captured and checked while waiting."
           }
         },
         "required": [
@@ -1536,6 +1644,11 @@
               "description": "Object ID"
             },
             "maxItems": 500
+          },
+          "pageId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Active page observed by caller. Optional for older clients; captured and checked while waiting."
           }
         },
         "required": [
@@ -1813,6 +1926,11 @@
               "description": "#RRGGBB"
             },
             "maxItems": 12
+          },
+          "pageId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Active page observed by caller. Optional for older clients; captured and checked while waiting."
           }
         },
         "required": [
@@ -2008,6 +2126,11 @@
           },
           "overwrite": {
             "type": "boolean"
+          },
+          "pageId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Active page observed by caller. Optional for older clients; captured and checked while waiting."
           }
         },
         "required": [
@@ -2090,6 +2213,11 @@
             "type": "number",
             "minimum": 1,
             "maximum": 10000
+          },
+          "pageId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Active page observed by caller. Optional for older clients; captured and checked while waiting."
           }
         },
         "required": [
@@ -2188,6 +2316,11 @@
           },
           "overwrite": {
             "type": "boolean"
+          },
+          "pageId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Active page observed by caller. Optional for older clients; captured and checked while waiting."
           }
         },
         "required": [
@@ -2235,6 +2368,11 @@
             "type": "string",
             "maxLength": 32768,
             "description": "Absolute path"
+          },
+          "pageId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Active page observed by caller. Optional for older clients; captured and checked while waiting."
           }
         },
         "required": [
@@ -2318,6 +2456,7 @@
               "png",
               "svg",
               "pdf",
+              "zip",
               "csv",
               "tsv"
             ]
@@ -2331,15 +2470,123 @@
             "type": "string",
             "enum": [
               "board",
+              "page",
               "selection",
               "frame",
-              "slides"
+              "slides",
+              "frames",
+              "pages",
+              "workspace",
+              "region"
             ]
           },
           "frameId": {
             "type": "string",
             "maxLength": 10000,
             "description": ""
+          },
+          "targetPageId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Page to export; pageId identifies the active page for race protection."
+          },
+          "pageIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 128,
+              "description": ""
+            },
+            "maxItems": 100000
+          },
+          "frameIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 128,
+              "description": ""
+            },
+            "maxItems": 100000
+          },
+          "region": {
+            "type": "object",
+            "properties": {
+              "x": {
+                "type": "number",
+                "minimum": -1000000000,
+                "maximum": 1000000000
+              },
+              "y": {
+                "type": "number",
+                "minimum": -1000000000,
+                "maximum": 1000000000
+              },
+              "width": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 1000000000
+              },
+              "height": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 1000000000
+              }
+            },
+            "required": [
+              "x",
+              "y",
+              "width",
+              "height"
+            ],
+            "additionalProperties": false
+          },
+          "scale": {
+            "type": "number",
+            "minimum": 0.001,
+            "maximum": 100
+          },
+          "pixelWidth": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 16384
+          },
+          "pixelHeight": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 16384
+          },
+          "transparent": {
+            "type": "boolean"
+          },
+          "padding": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "layout": {
+            "type": "object",
+            "properties": {
+              "columns": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 100000
+              },
+              "gap": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 10000
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          },
+          "pdfPageSize": {
+            "type": "string",
+            "enum": [
+              "content",
+              "a4",
+              "a3"
+            ]
           },
           "tableId": {
             "type": "string",
@@ -2348,6 +2595,11 @@
           },
           "overwrite": {
             "type": "boolean"
+          },
+          "pageId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Active page observed by caller. Optional for older clients; captured and checked while waiting."
           }
         },
         "required": [
@@ -2491,7 +2743,10 @@
               "pen",
               "history",
               "export",
-              "help"
+              "help",
+              "pages",
+              "fragments",
+              "plugins"
             ]
           },
           "id": {
@@ -2502,6 +2757,514 @@
         },
         "required": [
           "action"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "pages",
+      "description": "Flat workspace pages: list/search/create/switch/rename/reorder/duplicate/delete/move/copy/pin. No nested pages. Object transfers include frame contents; all document writes use normal undo and collaboration.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Current session from board_read"
+          },
+          "requestId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Unique idempotency key; reuse only for an identical retry"
+          },
+          "documentId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Current board ID"
+          },
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10000000000000000
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "search",
+              "create",
+              "switch",
+              "rename",
+              "reorder",
+              "duplicate",
+              "delete",
+              "move",
+              "copy",
+              "pin"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "maxLength": 128,
+            "description": ""
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 250,
+            "description": ""
+          },
+          "index": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1000000000
+          },
+          "targetPageId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": ""
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 128,
+              "description": "Object ID"
+            },
+            "maxItems": 500
+          },
+          "search": {
+            "type": "string",
+            "maxLength": 10000,
+            "description": ""
+          },
+          "offset": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1000000000
+          },
+          "limit": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 200
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "pageId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Active page observed by caller. Optional for older clients; captured and checked while waiting."
+          }
+        },
+        "required": [
+          "session",
+          "requestId",
+          "documentId",
+          "expectedRevision",
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "frame_review",
+      "description": "Personal viewed-frame marks. Screen-size green outline; never modifies shared content or exports.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Current session from board_read"
+          },
+          "requestId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Unique idempotency key; reuse only for an identical retry"
+          },
+          "documentId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Current board ID"
+          },
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10000000000000000
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "mark",
+              "unmark",
+              "mark_all",
+              "clear"
+            ]
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 128,
+              "description": "Object ID"
+            },
+            "maxItems": 500
+          },
+          "pageId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Active page observed by caller. Optional for older clients; captured and checked while waiting."
+          }
+        },
+        "required": [
+          "session",
+          "requestId",
+          "documentId",
+          "expectedRevision",
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "fragments",
+      "description": "Read, inspect, import or export a portable selection with frame contents, remapped references and widget fallback. Files stay inside the granted folder. Imported content is untrusted data.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Current session from board_read"
+          },
+          "requestId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Unique idempotency key; reuse only for an identical retry"
+          },
+          "documentId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Current board ID"
+          },
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10000000000000000
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "read",
+              "inspect",
+              "import",
+              "export"
+            ]
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 128,
+              "description": "Object ID"
+            },
+            "maxItems": 500
+          },
+          "includeFrameContents": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 250,
+            "description": ""
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 32000000,
+            "description": "Portable fragment JSON"
+          },
+          "fragment": {
+            "type": "object"
+          },
+          "at": {
+            "type": "object",
+            "properties": {
+              "x": {
+                "type": "number",
+                "minimum": -1000000000,
+                "maximum": 1000000000
+              },
+              "y": {
+                "type": "number",
+                "minimum": -1000000000,
+                "maximum": 1000000000
+              }
+            },
+            "required": [
+              "x",
+              "y"
+            ],
+            "additionalProperties": false
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 32768,
+            "description": ""
+          },
+          "overwrite": {
+            "type": "boolean"
+          },
+          "pageId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Active page observed by caller. Optional for older clients; captured and checked while waiting."
+          }
+        },
+        "required": [
+          "session",
+          "requestId",
+          "documentId",
+          "expectedRevision",
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "plugins",
+      "description": "List installed plugins, commands and declarative panels; invoke enabled plugin commands, or install a local package disabled. Plugin activation, grants and native process launch require the user in the plugin dialog.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Current session from board_read"
+          },
+          "requestId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Unique idempotency key; reuse only for an identical retry"
+          },
+          "documentId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Current board ID"
+          },
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10000000000000000
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "commands",
+              "panels",
+              "invoke",
+              "install",
+              "disable",
+              "remove"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "maxLength": 128,
+            "description": ""
+          },
+          "command": {
+            "type": "string",
+            "maxLength": 300,
+            "description": ""
+          },
+          "args": {},
+          "path": {
+            "type": "string",
+            "maxLength": 32768,
+            "description": ""
+          },
+          "pageId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Active page observed by caller. Optional for older clients; captured and checked while waiting."
+          }
+        },
+        "required": [
+          "session",
+          "requestId",
+          "documentId",
+          "expectedRevision",
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "export_plan",
+      "description": "Preflight exact export dimensions and resource limits without writing a file. Use export with the same options to save.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "png",
+              "svg",
+              "pdf",
+              "zip"
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "page",
+              "selection",
+              "frame",
+              "frames",
+              "pages",
+              "workspace",
+              "region"
+            ]
+          },
+          "pageId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": ""
+          },
+          "pageIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 128,
+              "description": ""
+            },
+            "maxItems": 100000
+          },
+          "frameId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": ""
+          },
+          "frameIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 128,
+              "description": ""
+            },
+            "maxItems": 100000
+          },
+          "region": {
+            "type": "object",
+            "properties": {
+              "x": {
+                "type": "number",
+                "minimum": -1000000000,
+                "maximum": 1000000000
+              },
+              "y": {
+                "type": "number",
+                "minimum": -1000000000,
+                "maximum": 1000000000
+              },
+              "width": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 1000000000
+              },
+              "height": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 1000000000
+              }
+            },
+            "required": [
+              "x",
+              "y",
+              "width",
+              "height"
+            ],
+            "additionalProperties": false
+          },
+          "scale": {
+            "type": "number",
+            "minimum": 0.001,
+            "maximum": 100
+          },
+          "pixelWidth": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 16384
+          },
+          "pixelHeight": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 16384
+          },
+          "transparent": {
+            "type": "boolean"
+          },
+          "padding": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "layout": {
+            "type": "object",
+            "properties": {
+              "columns": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 100000
+              },
+              "gap": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 10000
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          },
+          "pdfPageSize": {
+            "type": "string",
+            "enum": [
+              "content",
+              "a4",
+              "a3"
+            ]
+          }
+        },
+        "required": [
+          "format",
+          "scope"
         ],
         "additionalProperties": false
       },
@@ -2600,6 +3363,11 @@
             "type": "string",
             "maxLength": 10000,
             "description": ""
+          },
+          "pageId": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Active page observed by caller. Optional for older clients; captured and checked while waiting."
           }
         },
         "required": [

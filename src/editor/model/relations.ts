@@ -189,6 +189,29 @@ export function copyElements(
       groupPath: e.groupPath?.map((id) => groups.get(id)!),
       startBinding: binding(e.startBinding),
       endBinding: binding(e.endBinding),
+      cells: e.cells?.map((row) => [...row]),
+      grid: e.grid
+        ? {
+            rows: e.grid.rows.map(() => crypto.randomUUID()),
+            columns: e.grid.columns.map((c) => ({
+              ...c,
+              id: crypto.randomUUID(),
+              ...(c.options ? { options: [...c.options] } : {}),
+            })),
+          }
+        : undefined,
+      task: e.task
+        ? {
+            ...e.task,
+            items: e.task.items.map((item) => ({
+              ...item,
+              id: crypto.randomUUID(),
+            })),
+            dependencies: e.task.dependencies?.map((id) => ids.get(id) ?? id),
+            tags: e.task.tags ? [...e.task.tags] : undefined,
+          }
+        : undefined,
+      widget: e.widget ? structuredClone(e.widget) : undefined,
       link: e.link
         ? {
             ...e.link,

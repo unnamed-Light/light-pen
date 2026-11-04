@@ -1,5 +1,5 @@
 import * as Y from "yjs";
-import { validateDocument } from "../editor/model/types";
+import { validateDocument, pagesOf } from "../editor/model/types";
 import type { BoardDocument, SceneElement } from "../editor/model/types";
 import {
   updateText,
@@ -20,6 +20,7 @@ export class SharedBoard {
   readonly doc: Y.Doc;
   readonly meta: Y.Map<unknown>;
   readonly elements: Y.Map<Y.Map<unknown>>;
+  readonly pages: Y.Map<Y.Map<unknown>>;
   private cached = new Map<
     string,
     { map: Y.Map<unknown>; order: number; element: SceneElement; bytes: number }
@@ -32,6 +33,7 @@ export class SharedBoard {
     this.doc = doc;
     this.meta = doc.getMap("board");
     this.elements = doc.getMap("elements");
+    this.pages = doc.getMap("pages");
     this.elements.observeDeep((events) => {
       for (const event of events) {
         if (event.path.length) this.dirty.add(String(event.path[0]));
@@ -47,8 +49,19 @@ export class SharedBoard {
     this.doc.transact(() => {
       for (const key of ["id", "title", "createdAt"] as const)
         this.meta.set(key, document[key]);
+      for (const [index, page] of pagesOf(document).entries()) {
+        const map = new Y.Map<unknown>();
+        this.pages.set(page.id, map);
+        map.set("title", page.title);
+        map.set("_order", index);
+      }
       for (const [index, element] of document.elements.entries())
-        this.add(element, index);
+        this.add(
+          element.pageId
+            ? element
+            : { ...element, pageId: pagesOf(document)[0].id },
+          index,
+        );
     }, "seed");
   }
   private add(element: SceneElement, order: number) {
@@ -130,6 +143,27 @@ export class SharedBoard {
       );
     this.doc.transact(() => {
       if (before.title !== after.title) this.meta.set("title", after.title);
+      const oldPages = new Map(
+          pagesOf(before).map((p, i) => [p.id, { page: p, index: i }]),
+        ),
+        nextPages = pagesOf(after),
+        nextIds = new Set(nextPages.map((p) => p.id));
+      for (const id of oldPages.keys())
+        if (!nextIds.has(id)) this.pages.delete(id);
+      for (const [index, page] of nextPages.entries()) {
+        const previous = oldPages.get(page.id);
+        let map = this.pages.get(page.id);
+        if (!previous) {
+          if (map) continue;
+          map = new Y.Map<unknown>();
+          this.pages.set(page.id, map);
+          map.set("title", page.title);
+          map.set("_order", index);
+        } else if (map) {
+          if (previous.page.title !== page.title) map.set("title", page.title);
+          if (previous.index !== index) map.set("_order", index);
+        }
+      }
       for (const id of removed) this.elements.delete(id);
       for (const { index, element, previous, oldIndex } of actions) {
         const map = this.elements.get(element.id);
@@ -219,16 +253,46 @@ export class SharedBoard {
       );
     if (ordered.length > 100_000 || points > 2_000_000)
       throw new Error("Превышен размер общей доски.");
+    const pageEntries = [...this.pages.entries()]
+      .map(([id, map]) => {
+        if (!(map instanceof Y.Map) || !Number.isFinite(map.get("_order")))
+          throw Error("Повреждён порядок страниц.");
+        return {
+          id,
+          title: map.get("title") as string,
+          order: Number(map.get("_order")),
+        };
+      })
+      .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+    // Two peers can concurrently delete different last pages. Recover a stable
+    // landing page and retain late objects rather than losing concurrent work.
+    const pages = pageEntries.length
+      ? pageEntries.map(({ id, title }) => ({ id, title }))
+      : [{ id: "main", title: "Страница 1" }];
+    const pageIds = new Set(pages.map((p) => p.id));
     const document: BoardDocument = {
-      schemaVersion: 4,
+      schemaVersion: 5,
+      pages,
       id: this.meta.get("id"),
       title: this.meta.get("title"),
       createdAt: this.meta.get("createdAt"),
       updatedAt: new Date().toISOString(),
       revision,
-      elements: ordered.map((e) => e.element),
+      elements: ordered.map(({ element }) => {
+        if (element.pageId && pageIds.has(element.pageId)) return element;
+        const normalized = { ...element, pageId: pages[0].id };
+        bytes +=
+          new TextEncoder().encode(JSON.stringify(normalized)).length -
+          new TextEncoder().encode(JSON.stringify(element)).length;
+        changed.push(normalized);
+        return normalized;
+      }),
     } as BoardDocument;
-    validateDocument({ ...document, elements: changed });
+    const changedIds = new Set(changed.map((e) => e.id));
+    validateDocument({
+      ...document,
+      elements: document.elements.filter((e) => changedIds.has(e.id)),
+    });
     for (const id of this.cached.keys())
       if (!this.elements.has(id)) this.cached.delete(id);
     this.dirty.clear();

@@ -23,6 +23,12 @@ import {
 import { toCsv } from "../editor/model/tables";
 import { queryTasks } from "../editor/model/tasks";
 import { copyElements } from "../editor/model/relations";
+import { pagesOf } from "../editor/model/pages";
+import {
+  buildFragment,
+  importFragmentElements,
+} from "../editor/model/fragments";
+import type { PluginHost } from "../plugins/host";
 
 export function installApplicationCommands(
   agent: AgentController,
@@ -34,6 +40,7 @@ export function installApplicationCommands(
     help: () => void;
     export: () => void;
   },
+  plugins?: PluginHost,
 ) {
   const e = agent.editor;
   const file = async (
@@ -66,6 +73,8 @@ export function installApplicationCommands(
       e.document.revision !== a.expectedRevision
     )
       throw Error("REVISION_CONFLICT: board changed while waiting");
+    if (a.pageId !== undefined && e.activePageId !== a.pageId)
+      throw Error("PAGE_CHANGED: active page changed while waiting");
     if (!agent.grant || agent.grant.session !== a.session)
       throw Error("ACCESS_REVOKED");
   };
@@ -206,6 +215,12 @@ export function installApplicationCommands(
                   )
                 )
                   throw Error("Target missing");
+                if (
+                  !link.elementId &&
+                  link.pageId &&
+                  !pagesOf(loaded.document).some((p) => p.id === link.pageId)
+                )
+                  throw Error("Target page missing");
                 await switchTo(loaded.document, loaded.path, a);
               } else {
                 if (!native) throw Error("DESKTOP_REQUIRED");
@@ -217,10 +232,10 @@ export function installApplicationCommands(
               }
             }
             if (link.elementId) {
-              if (!e.elements.some((x) => x.id === link.elementId))
+              if (!e.document.elements.some((x) => x.id === link.elementId))
                 throw Error("Target missing");
               e.focusElement(link.elementId);
-            }
+            } else if (link.pageId) e.switchPage(link.pageId);
             return { opened: true, focused: link.elementId };
           }
           case "recent": {
@@ -294,7 +309,15 @@ export function installApplicationCommands(
             unchanged(a);
             await checkpoint(e.document);
             unchanged(a);
-            e.commit(doc.elements, "Восстановление версии ИИ", doc.title);
+            e.commitWorkspace(
+              doc.elements.map((x) =>
+                x.pageId ? x : { ...x, pageId: pagesOf(doc)[0].id },
+              ),
+              pagesOf(doc),
+              "Восстановление версии ИИ",
+              e.activePageId,
+              doc.title,
+            );
             await saver.flush();
             return { restored: a.version };
           }
@@ -314,7 +337,13 @@ export function installApplicationCommands(
             if (!e.selection.length) throw Error("Selection is empty");
             const doc = {
               ...createDocument(a.title || "Шаблон"),
-              elements: structuredClone(e.selection),
+              elements: importFragmentElements(
+                buildFragment(
+                  e.document,
+                  e.selection.map((x) => x.id),
+                ),
+                { pageId: "main" },
+              ).elements,
             };
             await saveTemplate(doc);
             return { id: doc.id, title: doc.title };
@@ -337,7 +366,10 @@ export function installApplicationCommands(
             unchanged(a);
             const doc = {
               ...createDocument(r.document.title),
-              elements: copyElements(r.document.elements, 0, 0),
+              elements: copyElements(r.document.elements, 0, 0).map((x) => ({
+                ...x,
+                pageId: "main",
+              })),
             };
             await saveTemplate(doc);
             return { id: doc.id };
@@ -391,9 +423,7 @@ export function installApplicationCommands(
       },
       export: async (a) => {
         let data: string;
-        if (a.format === "png")
-          data = (await exportPng(a)).dataUrl.split(",")[1];
-        else if (a.format === "csv" || a.format === "tsv") {
+        if (a.format === "csv" || a.format === "tsv") {
           let cells: string[][];
           if (a.tableId) {
             const t = e.elements.find(
@@ -428,24 +458,16 @@ export function installApplicationCommands(
             ];
           data = toCsv(cells, true, a.format === "csv" ? "," : "\t");
         } else {
-          const { exportSvg, exportPdf } =
-            await import("../editor/render/vector-export");
-          const ids = a.scope === "selection" ? new Set(e.selected) : undefined;
-          if (ids && !ids.size) throw Error("Selection is empty");
-          const frame =
-            a.scope === "frame"
-              ? e.slides.find((f) => f.id === a.frameId)
-              : undefined;
-          if (a.scope === "frame" && !frame) throw Error("Frame not found");
-          if (a.format === "svg")
-            data = (await exportSvg(e.document, { ids, frameId: frame?.id }))
-              .svg;
+          const { captureExportSnapshot, generateExport } =
+            await import("../export");
+          const snapshot = captureExportSnapshot(e.document, {
+            activePageId: e.activePageId,
+            selectionIds: e.selected,
+          });
+          const result = await generateExport(snapshot, exportRequest(a));
+          if (a.format === "svg") data = await result.blob.text();
           else {
-            const bytes = await exportPdf(e.document, {
-              ids,
-              frames:
-                a.scope === "slides" ? e.slides : frame ? [frame] : undefined,
-            });
+            const bytes = new Uint8Array(await result.blob.arrayBuffer());
             let binary = "";
             for (let i = 0; i < bytes.length; i += 8192)
               binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
@@ -458,6 +480,105 @@ export function installApplicationCommands(
           data,
           overwrite: a.overwrite ?? false,
         });
+      },
+      export_plan: async (a) => {
+        const { captureExportSnapshot, planExport } = await import("../export");
+        return planExport(
+          captureExportSnapshot(e.document, {
+            activePageId: e.activePageId,
+            selectionIds: e.selected,
+          }),
+          exportRequest(a),
+        );
+      },
+      fragments: async (a) => {
+        if (
+          a.action === "read" ||
+          a.action === "inspect" ||
+          a.action === "export"
+        ) {
+          const fragment = buildFragment(e.document, a.ids ?? [...e.selected], {
+            includeFrameContents: a.includeFrameContents,
+            title: a.title,
+            pageId: e.activePageId,
+          });
+          if (a.action === "read") return fragment;
+          if (a.action === "inspect")
+            return {
+              title: fragment.title,
+              objects: fragment.elements.length,
+              warnings: fragment.warnings,
+              elements: fragment.elements.map((x) => ({
+                id: x.id,
+                kind: x.kind,
+                name: x.name,
+                text: x.text?.slice(0, 160),
+                widget: x.widget
+                  ? {
+                      pluginId: x.widget.pluginId,
+                      type: x.widget.type,
+                      fallback: x.widget.fallback,
+                    }
+                  : undefined,
+              })),
+            };
+          if (!a.path) throw Error("path required");
+          if (!agent.grant?.files) throw Error("FILE_PERMISSION_REQUIRED");
+          unchanged(a);
+          return file("write", a.path, "lightpen-fragment", {
+            data: JSON.stringify(fragment),
+            overwrite: a.overwrite ?? false,
+          });
+        }
+        if (a.action === "import") {
+          let text = a.text;
+          if (a.path) {
+            if (!agent.grant?.files) throw Error("FILE_PERMISSION_REQUIRED");
+            text = (await file("read_fragment", a.path, "lightpen-fragment"))
+              .text;
+          }
+          unchanged(a);
+          return service("fragment_import", {
+            ...a,
+            text,
+            assert: () => unchanged(a),
+          });
+        }
+      },
+      plugins: async (a) => {
+        if (!plugins) throw Error("UNAVAILABLE: plugins");
+        await plugins.ready;
+        if (a.action === "list") return plugins.list();
+        if (a.action === "commands") return plugins.listCommands();
+        if (a.action === "panels") return plugins.listPanels();
+        unchanged(a);
+        if (a.action === "install") {
+          if (!a.path) throw Error("path required");
+          if (!agent.grant?.files) throw Error("FILE_PERMISSION_REQUIRED");
+          const { text } = await file("read_plugin", a.path, "lightpen-plugin");
+          unchanged(a);
+          await plugins.install(JSON.parse(text));
+          return { installed: true, enabled: false };
+        }
+        if (a.action === "invoke") {
+          if (!a.command) throw Error("command required");
+          return plugins.invoke(a.command, a.args ?? {}, {
+            session: a.session,
+            documentId: a.documentId,
+            expectedRevision: a.expectedRevision,
+            pageId: a.pageId,
+            requestId: a.requestId,
+            readOnly: !agent.grant?.write || e.readOnly,
+            files: agent.grant?.files,
+            folder: agent.grant?.folder,
+            network: agent.grant?.network,
+            assert: () => unchanged(a),
+          });
+        }
+        if (!a.id) throw Error("id required");
+        if (a.action === "disable") await plugins.disable(a.id);
+        else if (a.action === "remove") await plugins.remove(a.id);
+        return { ok: true };
       },
       presentation: async (a) => {
         if (a.action === "start") {
@@ -484,7 +605,10 @@ export function installApplicationCommands(
               !el.classList.contains("agent-dialog"),
           );
           if (
-            dialogs.length !== 1 ||
+            dialogs.length !== (panel.kind === "pages" ? 0 : 1) ||
+            (panel.kind === "pages" &&
+              !document.querySelector(".pages-popover")?.getClientRects()
+                .length) ||
             document.activeElement?.matches(
               "input:not([readonly]),textarea:not([readonly]),[contenteditable=true]",
             )
@@ -516,6 +640,15 @@ export function installApplicationCommands(
           ui.export();
           return { panel: "export" };
         }
+        if (["pages", "fragments", "plugins"].includes(a.action))
+          return service(
+            a.action === "pages"
+              ? "pages_ui"
+              : a.action === "fragments"
+                ? "fragment_ui"
+                : "plugins_ui",
+            { action: "open", agent: true },
+          );
         return service("panel_" + a.action, a);
       },
     };
@@ -523,6 +656,31 @@ export function installApplicationCommands(
     const fn = e.services.get(name);
     if (!fn) throw Error(`UNAVAILABLE: ${name}`);
     return fn(a);
+  }
+  function exportRequest(
+    a: Record<string, any>,
+  ): import("../export").ExportRequest {
+    return {
+      format: a.format,
+      scope:
+        a.scope === "board" || !a.scope
+          ? "page"
+          : a.scope === "slides"
+            ? "frames"
+            : a.scope,
+      pageId: a.targetPageId ?? a.pageId,
+      pageIds: a.pageIds,
+      frameId: a.frameId,
+      frameIds: a.frameIds,
+      region: a.region,
+      scale: a.scale ?? 2,
+      pixelWidth: a.pixelWidth,
+      pixelHeight: a.pixelHeight,
+      transparent: a.transparent,
+      padding: a.padding,
+      layout: a.layout,
+      pdfPageSize: a.pdfPageSize,
+    };
   }
   function paged(doc: BoardDocument, a: Record<string, any>) {
     const { elements, ...meta } = doc,

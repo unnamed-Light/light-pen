@@ -2,7 +2,7 @@ import * as Y from "yjs";
 import { LOCAL } from "./shared";
 import type { Editor } from "../editor/editor";
 import type { RoomClient } from "./client";
-import { resolveBindings } from "../editor/model/relations";
+import { resolveWorkspaceBindings, pagesOf } from "../editor/model/pages";
 
 /** Keeps local gestures atomic; remote packets wait until the active gesture ends. */
 export function bindRoom(editor: Editor, client: RoomClient) {
@@ -13,10 +13,13 @@ export function bindRoom(editor: Editor, client: RoomClient) {
   editor.setDocument(base);
   editor.readOnly = client.role === "viewer";
   if (editor.readOnly) editor.tool = "select";
-  const undo = new Y.UndoManager([client.shared.meta, client.shared.elements], {
-    trackedOrigins: new Set([LOCAL]),
-    captureTimeout: 0,
-  });
+  const undo = new Y.UndoManager(
+    [client.shared.meta, client.shared.elements, client.shared.pages],
+    {
+      trackedOrigins: new Set([LOCAL]),
+      captureTimeout: 0,
+    },
+  );
   editor.history.external = {
     get canUndo() {
       return undo.undoStack.length > 0;
@@ -35,20 +38,25 @@ export function bindRoom(editor: Editor, client: RoomClient) {
     if (!dirty || applying || closed || editor.isInteracting) return;
     dirty = false;
     const next = client.shared.snapshot(editor.document.revision + 1);
-    next.elements = resolveBindings(next.elements);
+    next.elements = resolveWorkspaceBindings(
+      next.elements,
+      pagesOf(next)[0].id,
+    );
     if (
       next.title === editor.document.title &&
-      next.elements.length === editor.elements.length &&
-      next.elements.every((e, i) => e === editor.elements[i])
+      JSON.stringify(next.pages) === JSON.stringify(editor.document.pages) &&
+      next.elements.length === editor.document.elements.length &&
+      next.elements.every((e, i) => e === editor.document.elements[i])
     ) {
       base = editor.document;
       return;
     }
     applying = true;
     editor.document = next;
+    editor.ensureActivePage();
     editor.pruneGroupScope();
     base = next;
-    const ids = new Set(next.elements.map((e) => e.id));
+    const ids = new Set(editor.elements.map((e) => e.id));
     editor.selected = new Set([...editor.selected].filter((id) => ids.has(id)));
     editor.emit("document");
     editor.emit("scene");
@@ -81,8 +89,12 @@ export function bindRoom(editor: Editor, client: RoomClient) {
         base = next;
       } catch (error) {
         const restored = client.shared.snapshot(editor.document.revision + 1);
-        restored.elements = resolveBindings(restored.elements);
+        restored.elements = resolveWorkspaceBindings(
+          restored.elements,
+          pagesOf(restored)[0].id,
+        );
         editor.document = restored;
+        editor.ensureActivePage();
         base = restored;
         editor.pruneGroupScope();
         const ids = new Set(restored.elements.map((e) => e.id));

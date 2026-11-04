@@ -2,6 +2,14 @@ import { History } from "./commands/history";
 import { gridOf } from "./model/data";
 import { bindingAt, copyElements, resolveBindings } from "./model/relations";
 import {
+  pagesOf,
+  pageElements,
+  elementPage,
+  replacePageElements,
+  resolveWorkspaceBindings,
+} from "./model/pages";
+import { buildFragment, importFragmentElements } from "./model/fragments";
+import {
   bounds,
   clamp,
   contains,
@@ -95,6 +103,14 @@ export interface Replay {
 
 export class Editor {
   document: BoardDocument = createDocument();
+  activePageId = "main";
+  private pageElementsCache: {
+    elements: SceneElement[];
+    pageId: string;
+    result: SceneElement[];
+  } | null = null;
+  private pageViews: Record<string, Camera> = {};
+  private pagePinned = new Set<string>();
   camera: Camera = { x: 0, y: 0, zoom: 1 };
   tool: Tool = "pen";
   style: PaintStyle = { ...DEFAULT_STYLE };
@@ -189,7 +205,287 @@ export class Editor {
     for (const fn of this.listeners) fn(signal);
   }
   get elements() {
-    return this.document.elements;
+    if (this.pages.length === 1) return this.document.elements;
+    const old = this.pageElementsCache;
+    if (
+      old?.elements === this.document.elements &&
+      old.pageId === this.activePageId
+    )
+      return old.result;
+    const result = pageElements(this.document, this.activePageId);
+    this.pageElementsCache = {
+      elements: this.document.elements,
+      pageId: this.activePageId,
+      result,
+    };
+    return result;
+  }
+  get pages() {
+    return pagesOf(this.document);
+  }
+  get activePage() {
+    return this.pages.find((p) => p.id === this.activePageId) ?? this.pages[0];
+  }
+  isPagePinned(id: string) {
+    return this.pagePinned.has(id);
+  }
+  pinPage(id: string, pinned: boolean) {
+    if (!this.pages.some((p) => p.id === id))
+      throw Error("Страница не найдена.");
+    if (pinned) this.pagePinned.add(id);
+    else this.pagePinned.delete(id);
+    this.savePageView();
+    this.emit("ui");
+  }
+  savePageView() {
+    this.pageViews[this.activePageId] = { ...this.camera };
+    try {
+      if (typeof localStorage !== "undefined")
+        localStorage.setItem(
+          "lightpen.pages." + this.document.id,
+          JSON.stringify({
+            active: this.activePageId,
+            cameras: this.pageViews,
+            pinned: [...this.pagePinned],
+          }),
+        );
+    } catch {
+      /* Personal view state must never prevent saving content. */
+    }
+  }
+  ensureActivePage() {
+    if (!this.pages.some((p) => p.id === this.activePageId)) {
+      this.activePageId = this.pages[0].id;
+      this.selected.clear();
+      this.groupScope = [];
+      this.camera = this.pageViews[this.activePageId] ?? {
+        x: 0,
+        y: 0,
+        zoom: 1,
+      };
+    }
+    this.pageElementsCache = null;
+  }
+  switchPage(id: string) {
+    if (!this.pages.some((p) => p.id === id))
+      throw Error("Страница не найдена.");
+    if (id === this.activePageId) return;
+    this.commitText();
+    this.endStyle();
+    if (this.isInteracting)
+      throw Error("Завершите текущий ввод перед сменой страницы.");
+    this.savePageView();
+    this.stopReplay();
+    this.presenting = false;
+    this.presentationFrame = null;
+    this.selected.clear();
+    this.groupScope = [];
+    this.contextMenu = null;
+    this.activePageId = id;
+    this.pageElementsCache = null;
+    const camera = this.pageViews[id];
+    if (camera) this.camera = { ...camera };
+    else {
+      this.camera = { x: 0, y: 0, zoom: 1 };
+      this.fit();
+    }
+    this.savePageView();
+    this.emit("scene");
+    this.emit("ui");
+    this.emit("camera");
+  }
+  commitWorkspace(
+    elements: SceneElement[],
+    pages: import("./model/types").BoardPage[],
+    label: string,
+    active = this.activePageId,
+    title = this.document.title,
+  ) {
+    if (this.readOnly) throw Error("Доступ только для чтения.");
+    if (this.isInteracting) throw Error("Завершите текущий ввод.");
+    const defaultPage = this.pages[0].id;
+    const normalized = elements.map((e) =>
+      e.pageId ? e : { ...e, pageId: defaultPage },
+    );
+    const next = {
+      ...this.document,
+      schemaVersion: 5 as const,
+      pages,
+      title,
+      elements: resolveWorkspaceBindings(normalized, pages[0]?.id),
+    };
+    validateDocument(next);
+    if (
+      new TextEncoder().encode(JSON.stringify(next)).length >
+      64 * 1024 * 1024
+    )
+      throw Error(
+        "Пространство превысит 64 МиБ. Перенесите часть объектов в другой файл.",
+      );
+    const before = this.document,
+      previousPage = this.activePageId;
+    this.history.push(
+      before.elements,
+      next.elements,
+      label,
+      before.title,
+      next.title,
+      this.pages,
+      pages,
+      previousPage,
+      active,
+    );
+    this.activePageId = active;
+    this.document = {
+      ...next,
+      revision: before.revision + 1,
+      updatedAt: new Date().toISOString(),
+    };
+    this.ensureActivePage();
+    if (previousPage !== this.activePageId) {
+      this.selected.clear();
+      this.groupScope = [];
+      this.camera = {
+        ...(this.pageViews[this.activePageId] ?? { x: 0, y: 0, zoom: 1 }),
+      };
+      this.emit("camera");
+    } else {
+      const present = new Set(this.elements.map((e) => e.id));
+      this.selected = new Set(
+        [...this.selected].filter((id) => present.has(id)),
+      );
+      this.pruneGroupScope();
+    }
+    this.emit("document");
+    this.emit("scene");
+    this.emit("ui");
+  }
+  createPage(title = "Новая страница") {
+    if (this.isInteracting) throw Error("Завершите текущий ввод.");
+    const p = {
+      id: uid(),
+      title: title.trim().slice(0, 250) || "Новая страница",
+    };
+    this.savePageView();
+    this.commitWorkspace(
+      this.document.elements,
+      [...this.pages, p],
+      "Создание страницы",
+      p.id,
+    );
+    this.camera = { x: 0, y: 0, zoom: 1 };
+    this.savePageView();
+    this.emit("camera");
+    return p;
+  }
+  renamePage(id: string, title: string) {
+    const clean = title.trim().slice(0, 250);
+    if (!clean) throw Error("Введите название страницы.");
+    if (!this.pages.some((p) => p.id === id))
+      throw Error("Страница не найдена.");
+    this.commitWorkspace(
+      this.document.elements,
+      this.pages.map((p) => (p.id === id ? { ...p, title: clean } : p)),
+      "Название страницы",
+    );
+  }
+  reorderPage(id: string, index: number) {
+    const pages = [...this.pages],
+      at = pages.findIndex((p) => p.id === id);
+    if (
+      at < 0 ||
+      !Number.isInteger(index) ||
+      index < 0 ||
+      index >= pages.length
+    )
+      throw Error("Неверный порядок страниц.");
+    const [p] = pages.splice(at, 1);
+    pages.splice(index, 0, p);
+    this.commitWorkspace(this.document.elements, pages, "Порядок страниц");
+  }
+  deletePage(id: string) {
+    if (this.pages.length === 1)
+      throw Error("Нельзя удалить последнюю страницу.");
+    if (!this.pages.some((p) => p.id === id))
+      throw Error("Страница не найдена.");
+    if (this.isInteracting) throw Error("Завершите текущий ввод.");
+    const pages = this.pages.filter((p) => p.id !== id);
+    this.savePageView();
+    this.commitWorkspace(
+      this.document.elements.filter(
+        (e) => elementPage(this.document, e) !== id,
+      ),
+      pages,
+      "Удаление страницы",
+      id === this.activePageId ? pages[0].id : this.activePageId,
+    );
+    this.fit();
+  }
+  duplicatePage(id: string) {
+    const src = this.pages.find((p) => p.id === id);
+    if (!src) throw Error("Страница не найдена.");
+    const page = { id: uid(), title: (src.title + " — копия").slice(0, 250) },
+      original = pageElements(this.document, id),
+      copies = copyElements(original, 0, 0);
+    const copied = new Set(copies.map((e) => e.id));
+    const elements = copies.map((e) => ({
+      ...e,
+      pageId: page.id,
+      ...(e.link &&
+      !e.link.path &&
+      e.link.elementId &&
+      copied.has(e.link.elementId)
+        ? { link: { ...e.link, pageId: page.id } }
+        : {}),
+    }));
+    this.savePageView();
+    this.commitWorkspace(
+      [...this.document.elements, ...elements],
+      [...this.pages, page],
+      "Дублирование страницы",
+      page.id,
+    );
+    this.fit();
+    return page;
+  }
+  transferElements(ids: string[], targetPageId: string, copy = false) {
+    if (!this.pages.some((p) => p.id === targetPageId))
+      throw Error("Страница не найдена.");
+    if (targetPageId === this.activePageId)
+      throw Error("Выберите другую страницу.");
+    const activeIds = new Set(this.elements.map((e) => e.id));
+    if (ids.some((id) => !activeIds.has(id)))
+      throw Error("Один из объектов не найден на текущей странице.");
+    const fragment = buildFragment(this.document, ids, {
+        pageId: this.activePageId,
+        includeFrameContents: true,
+      }),
+      picked = new Set(fragment.elements.map((e) => e.id));
+    const source = this.elements.filter((e) => picked.has(e.id));
+    if (!source.length) throw Error("Нет выбранных объектов.");
+    if (!copy && source.some((e) => e.locked))
+      throw Error("Сначала разблокируйте объекты.");
+    const moved = copy
+      ? importFragmentElements(fragment, { pageId: targetPageId }).elements
+      : source.map((e) => ({ ...e, pageId: targetPageId }));
+    const movedIds = new Set(moved.map((e) => e.id));
+    const base = copy
+      ? this.document.elements
+      : this.document.elements.filter((e) => !picked.has(e.id));
+    const all = [...base, ...moved].map((e) =>
+      e.link &&
+      !e.link.path &&
+      e.link.elementId &&
+      movedIds.has(e.link.elementId)
+        ? { ...e, link: { ...e.link, pageId: targetPageId } }
+        : e,
+    );
+    this.commitWorkspace(
+      all,
+      this.pages,
+      copy ? "Копирование на страницу" : "Перенос на страницу",
+    );
+    return moved.map((e) => e.id);
   }
   get selection() {
     return this.elements.filter((e) => this.selected.has(e.id));
@@ -234,6 +530,7 @@ export class Editor {
 
   setDocument(doc: BoardDocument) {
     validateDocument(doc);
+    if (doc.id !== this.document.id) this.savePageView();
     this.cancelGesture();
     this.editing = null;
     this.styleBefore = null;
@@ -244,23 +541,66 @@ export class Editor {
     this.presenting = false;
     this.presentationFrame = null;
     this.replay = null;
-    this.document = { ...doc, elements: resolveBindings(doc.elements) };
+    this.document = {
+      ...doc,
+      elements: resolveWorkspaceBindings(doc.elements, pagesOf(doc)[0].id),
+    };
+    this.pageViews = {};
+    this.pagePinned.clear();
+    this.activePageId = pagesOf(doc)[0].id;
+    this.pageElementsCache = null;
+    try {
+      if (typeof localStorage !== "undefined") {
+        const state = JSON.parse(
+          localStorage.getItem("lightpen.pages." + doc.id) ?? "null",
+        );
+        if (state) {
+          if (this.pages.some((p) => p.id === state.active))
+            this.activePageId = state.active;
+          for (const [id, c] of Object.entries(state.cameras ?? {})) {
+            const v = c as Camera;
+            if (
+              v &&
+              [v.x, v.y, v.zoom].every(Number.isFinite) &&
+              v.zoom >= 0.05 &&
+              v.zoom <= 8
+            )
+              this.pageViews[id] = v;
+          }
+          this.pagePinned = new Set(
+            (state.pinned ?? []).filter((id: string) =>
+              this.pages.some((p) => p.id === id),
+            ),
+          );
+        }
+      }
+    } catch {
+      /* Ignore malformed personal preferences. */
+    }
     this.history.clear();
     this.selected.clear();
     this.groupScope = [];
     this.camera = { x: 0, y: 0, zoom: 1 };
     this.emit("scene");
     this.fit();
+    if (this.pageViews[this.activePageId])
+      this.setCamera(this.pageViews[this.activePageId]);
   }
-  private changed(elements: SceneElement[], title = this.document.title) {
+  private changed(
+    elements: SceneElement[],
+    title = this.document.title,
+    pages = this.pages,
+  ) {
     this.document = {
       ...this.document,
-      schemaVersion: 4,
+      schemaVersion: 5,
+      pages,
       title,
-      elements: resolveBindings(elements),
+      elements: resolveWorkspaceBindings(elements, pages[0].id),
       revision: this.document.revision + 1,
       updatedAt: new Date().toISOString(),
     };
+    this.ensureActivePage();
     if (this.selected.size) {
       const found = new Set<string>();
       for (
@@ -286,14 +626,19 @@ export class Editor {
       });
       if (elements.some((e) => (e.groupPath?.length ?? 0) > 32)) return;
     }
+    const all = replacePageElements(this.document, this.activePageId, elements);
     this.history.push(
-      this.elements,
-      elements,
+      this.document.elements,
+      all,
       label,
       title === undefined ? undefined : this.document.title,
       title,
+      this.pages,
+      this.pages,
+      this.activePageId,
+      this.activePageId,
     );
-    this.changed(elements, title);
+    this.changed(all, title);
   }
   rename(title: string) {
     if (this.readOnly) return;
@@ -312,15 +657,47 @@ export class Editor {
     this.endStyle();
     this.commitText();
     this.cancelGesture();
-    const e = this.history.undo();
-    if (e) this.changed(e, this.history.restoredTitle);
+    this.savePageView();
+    const previousPage = this.activePageId,
+      e = this.history.undo();
+    if (e) {
+      if (this.history.restoredPageId)
+        this.activePageId = this.history.restoredPageId;
+      this.changed(
+        e,
+        this.history.restoredTitle,
+        this.history.restoredPages ?? this.pages,
+      );
+      if (previousPage !== this.activePageId) {
+        this.setCamera(
+          this.pageViews[this.activePageId] ?? { x: 0, y: 0, zoom: 1 },
+        );
+      }
+      this.emit("scene");
+    }
   }
   redo() {
     this.endStyle();
     this.commitText();
     this.cancelGesture();
-    const e = this.history.redo();
-    if (e) this.changed(e, this.history.restoredTitle);
+    this.savePageView();
+    const previousPage = this.activePageId,
+      e = this.history.redo();
+    if (e) {
+      if (this.history.restoredPageId)
+        this.activePageId = this.history.restoredPageId;
+      this.changed(
+        e,
+        this.history.restoredTitle,
+        this.history.restoredPages ?? this.pages,
+      );
+      if (previousPage !== this.activePageId) {
+        this.setCamera(
+          this.pageViews[this.activePageId] ?? { x: 0, y: 0, zoom: 1 },
+        );
+      }
+      this.emit("scene");
+    }
   }
   setTool(tool: Tool) {
     if (this.readOnly && tool !== "select" && tool !== "hand") return;
@@ -345,7 +722,14 @@ export class Editor {
         return;
       }
       if (this.styleBefore) {
-        this.document = { ...this.document, elements: resolveBindings(els) };
+        this.document = {
+          ...this.document,
+          elements: replacePageElements(
+            this.document,
+            this.activePageId,
+            resolveBindings(els),
+          ),
+        };
         this.emit("scene");
       } else if (els.some((e, i) => e !== this.elements[i]))
         this.commit(els, "Свойства");
@@ -455,7 +839,10 @@ export class Editor {
     this.styleBefore = null;
     const after = this.elements;
     if (before === after) return;
-    this.document = { ...this.document, elements: before };
+    this.document = {
+      ...this.document,
+      elements: replacePageElements(this.document, this.activePageId, before),
+    };
     this.commit(after, "Свойства");
   }
   private groupMembers(el: SceneElement) {
@@ -722,8 +1109,10 @@ export class Editor {
     return { dx: dx + adjustX, dy: dy + adjustY };
   }
   focusElement(id: string) {
-    const e = this.elements.find((e) => e.id === id);
+    const e = this.document.elements.find((e) => e.id === id);
     if (!e) return;
+    const pageId = elementPage(this.document, e);
+    if (pageId !== this.activePageId) this.switchPage(pageId);
     this.selected = new Set([id]);
     this.fit(true);
     this.emit("ui");
@@ -776,7 +1165,14 @@ export class Editor {
     );
     const elements = this.elements.map((e) => changed.get(e.id) ?? e);
     if (this.styleBefore) {
-      this.document = { ...this.document, elements: resolveBindings(elements) };
+      this.document = {
+        ...this.document,
+        elements: replacePageElements(
+          this.document,
+          this.activePageId,
+          resolveBindings(elements),
+        ),
+      };
       this.emit("scene");
     } else this.commit(elements, "Поворот");
   }
@@ -798,7 +1194,14 @@ export class Editor {
       );
     const elements = this.elements.map((e) => changed.get(e.id) ?? e);
     if (this.styleBefore) {
-      this.document = { ...this.document, elements: resolveBindings(elements) };
+      this.document = {
+        ...this.document,
+        elements: replacePageElements(
+          this.document,
+          this.activePageId,
+          resolveBindings(elements),
+        ),
+      };
       this.emit("scene");
     } else this.commit(elements, "Размер");
   }

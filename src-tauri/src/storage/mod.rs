@@ -10,9 +10,18 @@ const APP_ID: i32 = 0x4c50454e;
 const MAX_JSON_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoardPage {
+    pub id: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BoardDocument {
     pub schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pages: Option<Vec<BoardPage>>,
     pub id: String,
     pub title: String,
     pub revision: u64,
@@ -38,7 +47,7 @@ fn valid_color(value: Option<&Value>) -> bool {
 }
 
 pub fn validate(doc: &BoardDocument) -> Result<(), String> {
-    if ![1, 2, 3, 4].contains(&doc.schema_version) {
+    if ![1, 2, 3, 4, 5].contains(&doc.schema_version) {
         return Err("Эта версия файла не поддерживается. Обновите Light Pen.".into());
     }
     if doc.id.is_empty()
@@ -53,6 +62,28 @@ pub fn validate(doc: &BoardDocument) -> Result<(), String> {
     {
         return Err("Повреждена структура документа.".into());
     }
+    let mut page_ids = HashSet::new();
+    if let Some(pages) = &doc.pages {
+        if pages.is_empty() {
+            return Err("В пространстве должна быть страница.".into());
+        }
+        for page in pages {
+            if page.id.is_empty()
+                || page.id.len() > 128
+                || !page
+                    .id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                || !page_ids.insert(page.id.as_str())
+                || page.title.trim().is_empty()
+                || page.title.chars().count() > 250
+            {
+                return Err("Повреждён список страниц.".into());
+            }
+        }
+    } else if doc.schema_version == 5 {
+        return Err("В пространстве нет страниц.".into());
+    }
     let mut ids = HashSet::new();
     let mut point_count = 0usize;
     for el in &doc.elements {
@@ -63,6 +94,12 @@ pub fn validate(doc: &BoardDocument) -> Result<(), String> {
             .ok_or("У объекта нет идентификатора.")?;
         if !ids.insert(id) {
             return Err("В документе повторяются идентификаторы объектов.".into());
+        }
+        if el
+            .get("pageId")
+            .is_some_and(|v| v.as_str().is_none_or(|s| !page_ids.contains(s)))
+        {
+            return Err("Объект относится к неизвестной странице.".into());
         }
         let kind = el
             .get("kind")
@@ -297,7 +334,7 @@ pub fn read_document(path: &Path) -> Result<(BoardDocument, Option<String>), Str
     let version: u32 = connection
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .map_err(|e| e.to_string())?;
-    if ![1, 2, 3, 4].contains(&version) {
+    if ![1, 2, 3, 4, 5].contains(&version) {
         return Err("Эта версия файла не поддерживается. Обновите Light Pen.".into());
     }
     let result: String = connection
@@ -685,6 +722,7 @@ mod tests {
     fn document() -> BoardDocument {
         BoardDocument {
             schema_version: 1,
+            pages: None,
             id: "test-document".into(),
             title: "Доска 日本語 ✨".into(),
             revision: 42,
@@ -708,6 +746,79 @@ mod tests {
         }
     }
 
+    #[test]
+    fn version_five_round_trips_pages_widgets_and_page_links_in_sqlite_drafts_and_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Много страниц.lightpen");
+        let mut doc = document();
+        doc.schema_version = 5;
+        doc.pages = Some(vec![
+            BoardPage {
+                id: "overview".into(),
+                title: "Обзор".into(),
+            },
+            BoardPage {
+                id: "details".into(),
+                title: "Детали 日本語".into(),
+            },
+        ]);
+        for (i, el) in doc.elements.iter_mut().enumerate() {
+            el["pageId"] = json!(if i % 2 == 0 { "overview" } else { "details" });
+        }
+        doc.elements[1]["widget"] = json!({"pluginId":"test.counter","type":"counter","version":1,"data":{"count":7,"notes":["Один","Два"]},"fallback":"Семь идей"});
+        doc.elements[2]["link"] = json!({"path":"","pageId":"details","label":"Вперёд"});
+        atomic_save(&path, &doc, None).unwrap();
+        assert_eq!(read_document(&path).unwrap().0, doc);
+        let connection = Connection::open(&path).unwrap();
+        let version: u32 = connection
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 5);
+        drop(connection);
+        let profile = dir.path().join("profile");
+        persist_session(&profile, &doc, None).unwrap();
+        assert_eq!(restore_session(&profile).unwrap().document.unwrap(), doc);
+        save_checkpoint(&profile, &doc, true).unwrap();
+        let history = list_versions(&profile, &doc.id).unwrap();
+        assert!(!history.is_empty());
+        assert_eq!(
+            read_version(&profile, &doc.id, &history[0].id).unwrap(),
+            doc
+        );
+    }
+    #[test]
+    fn invalid_flat_pages_or_widget_data_cannot_replace_an_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Сохранность.lightpen");
+        let original = document();
+        atomic_save(&path, &original, None).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let mut candidate = original.clone();
+        candidate.schema_version = 5;
+        candidate.pages = Some(vec![BoardPage {
+            id: "main".into(),
+            title: "Первая".into(),
+        }]);
+        candidate.elements[1]["pageId"] = json!("missing");
+        assert!(atomic_save(&path, &candidate, None).is_err());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        candidate.elements[1]["pageId"] = json!("main");
+        candidate.elements[1]["widget"] =
+            json!({"pluginId":"test.widget","type":"counter","version":0,"fallback":"Идея"});
+        assert!(atomic_save(&path, &candidate, None).is_err());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        let nested = json!({"schemaVersion":5,"id":"nested","title":"Nested","revision":0,"createdAt":"now","updatedAt":"now","elements":[],"pages":[{"id":"main","title":"Главная","pages":[]}]});
+        assert!(serde_json::from_value::<BoardDocument>(nested).is_err());
+        candidate.elements[1]
+            .as_object_mut()
+            .unwrap()
+            .remove("widget");
+        candidate.pages.as_mut().unwrap().push(BoardPage {
+            id: "main".into(),
+            title: "Повтор".into(),
+        });
+        assert!(validate(&candidate).is_err());
+    }
     #[test]
     fn version_two_round_trips_formatting_frames_math_and_bindings() {
         let dir = tempfile::tempdir().unwrap();

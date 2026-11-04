@@ -67,7 +67,10 @@ export function Planning({
     () => queryTasks(editor.elements, query),
     [editor.elements, query],
   );
-  const issues = useMemo(() => taskIssues(editor.elements), [editor.elements]);
+  const issues = useMemo(
+    () => taskIssues(editor.document.elements),
+    [editor.document.elements],
+  );
   const timedTasks = useMemo(
     () => tasks.map((task) => ({ task, interval: taskInterval(task.task) })),
     [tasks],

@@ -15,6 +15,7 @@ export type ElementKind =
   | "link";
 export interface LocalLink {
   path: string;
+  pageId?: string;
   elementId?: string;
   label?: string;
 }
@@ -80,6 +81,14 @@ export interface Camera {
 }
 export interface SceneElement {
   id: string;
+  pageId?: string;
+  widget?: {
+    pluginId: string;
+    type: string;
+    version: number;
+    data: unknown;
+    fallback: string;
+  };
   kind: ElementKind;
   x: number;
   y: number;
@@ -117,8 +126,21 @@ export interface SceneElement {
   link?: LocalLink;
   slideOrder?: number;
 }
+export interface BoardPage {
+  id: string;
+  title: string;
+}
+export const MAIN_PAGE = "main";
+const legacyPages: BoardPage[] = [
+  Object.freeze({ id: MAIN_PAGE, title: "Страница 1" }),
+];
+Object.freeze(legacyPages);
+export function pagesOf(doc: BoardDocument): BoardPage[] {
+  return doc.pages?.length ? doc.pages : legacyPages;
+}
 export interface BoardDocument {
-  schemaVersion: 1 | 2 | 3 | 4;
+  schemaVersion: 1 | 2 | 3 | 4 | 5;
+  pages?: BoardPage[];
   id: string;
   title: string;
   revision: number;
@@ -181,7 +203,8 @@ export const uid = () => crypto.randomUUID();
 export function createDocument(title = "Без названия"): BoardDocument {
   const now = new Date().toISOString();
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
+    pages: [{ id: "main", title: "Страница 1" }],
     id: uid(),
     title,
     revision: 0,
@@ -254,7 +277,7 @@ export function validateDocument(value: unknown): BoardDocument {
   if (!value || typeof value !== "object")
     throw new Error("Файл не содержит доску Light Pen.");
   const doc = value as BoardDocument;
-  if (![1, 2, 3, 4].includes(doc.schemaVersion))
+  if (![1, 2, 3, 4, 5].includes(doc.schemaVersion))
     throw new Error("Эта версия файла не поддерживается. Обновите Light Pen.");
   if (
     typeof doc.id !== "string" ||
@@ -269,6 +292,26 @@ export function validateDocument(value: unknown): BoardDocument {
     doc.elements.length > 100_000
   )
     throw new Error("Повреждена структура документа.");
+  const pageIds = new Set<string>();
+  if (doc.pages !== undefined) {
+    if (!Array.isArray(doc.pages) || !doc.pages.length)
+      throw Error("В пространстве должна быть страница.");
+    for (const p of doc.pages) {
+      if (
+        !p ||
+        typeof p.id !== "string" ||
+        !/^[a-z\d_-]{1,128}$/i.test(p.id) ||
+        pageIds.has(p.id) ||
+        typeof p.title !== "string" ||
+        !p.title.trim() ||
+        p.title.length > 250 ||
+        Object.keys(p).some((k) => !["id", "title"].includes(k))
+      )
+        throw Error("Повреждён список страниц.");
+      pageIds.add(p.id);
+    }
+  } else if (doc.schemaVersion === 5)
+    throw Error("В пространстве нет страниц.");
   const ids = new Set<string>();
   let points = 0;
   for (const el of doc.elements) {
@@ -298,6 +341,30 @@ export function validateDocument(value: unknown): BoardDocument {
     )
       throw new Error("В документе есть повреждённый объект.");
     ids.add(el.id);
+    if (
+      el.pageId !== undefined &&
+      (typeof el.pageId !== "string" || !pageIds.has(el.pageId))
+    )
+      throw Error("Объект относится к неизвестной странице.");
+    if (el.widget !== undefined) {
+      const w = el.widget;
+      if (
+        !w ||
+        typeof w !== "object" ||
+        el.kind !== "rectangle" ||
+        typeof w.pluginId !== "string" ||
+        !/^[a-z\d][a-z\d._-]{0,127}$/i.test(w.pluginId) ||
+        typeof w.type !== "string" ||
+        !w.type ||
+        w.type.length > 128 ||
+        !Number.isSafeInteger(w.version) ||
+        w.version < 1 ||
+        typeof w.fallback !== "string" ||
+        w.fallback.length > 100000 ||
+        JSON.stringify(w.data ?? null).length > 1_000_000
+      )
+        throw Error("Повреждены данные виджета.");
+    }
     if (
       el.groupPath !== undefined &&
       (!Array.isArray(el.groupPath) ||
@@ -343,6 +410,9 @@ export function validateDocument(value: unknown): BoardDocument {
         typeof el.link.path !== "string" ||
         el.link.path.length > 4096 ||
         /[\x00-\x1f]/.test(el.link.path) ||
+        (el.link.pageId !== undefined &&
+          (typeof el.link.pageId !== "string" ||
+            !/^[a-z\d_-]{1,128}$/i.test(el.link.pageId))) ||
         (el.link.elementId !== undefined &&
           (typeof el.link.elementId !== "string" ||
             el.link.elementId.length > 128)) ||

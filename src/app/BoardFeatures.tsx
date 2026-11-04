@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Button,
+  Checkbox,
   Dialog,
   DialogActions,
   DialogBody,
@@ -28,6 +29,8 @@ import { checkpoint, readVersion, versions } from "../platform/native";
 import type { DocumentVersion } from "../platform/native";
 import { getStroke } from "perfect-freehand";
 import { keyboardCode } from "../platform/keyboard";
+import { reviewFor } from "../platform/review";
+import { pagesOf } from "../editor/model/pages";
 
 export function BoardFeatures({
   editor,
@@ -53,6 +56,9 @@ export function BoardFeatures({
     editor.emit("ui");
   };
   const [query, setQuery] = useState("");
+  const [unviewedOnly, setUnviewedOnly] = useState(false);
+  const review = reviewFor(editor);
+  const viewed = review.ids();
   const [settings, setSettingsState] = useState(false),
     [history, setHistoryState] = useState(false),
     [snapshots, setSnapshots] = useState<DocumentVersion[]>([]),
@@ -95,6 +101,40 @@ export function BoardFeatures({
       : [];
   }, [query, editor.document]);
   const frames = editor.slides;
+  const listedFrames = unviewedOnly
+    ? frames.filter((frame) => !viewed.has(frame.id))
+    : frames;
+  useEffect(() => {
+    const fn = async (a: Record<string, any>) => {
+      const frames = editor.elements.filter((e) => e.kind === "frame");
+      if (a.action === "identity") review.setIdentity(a.identity);
+      else if (a.action === "clear") review.clear();
+      else if (a.action === "mark_all") review.mark(frames.map((e) => e.id));
+      else if (a.action === "mark" || a.action === "unmark") {
+        const ids = a.ids ?? [];
+        if (
+          !Array.isArray(ids) ||
+          ids.some((id) => !frames.some((f) => f.id === id))
+        )
+          throw Error("Фрейм не найден на текущей странице.");
+        review.mark(ids, a.action === "mark");
+      } else if (a.action !== "list")
+        throw Error("Неизвестное действие просмотра.");
+      return {
+        pageId: editor.activePageId,
+        frames: frames.map((e) => ({
+          id: e.id,
+          title: e.text,
+          viewed: review.has(e.id),
+        })),
+      };
+    };
+    editor.services.set("frame_review", fn);
+    return () => {
+      if (editor.services.get("frame_review") === fn)
+        editor.services.delete("frame_review");
+    };
+  }, [editor, review]);
   useEffect(() => {
     try {
       const eraser = Number(localStorage.getItem("lightpen.eraserSize")),
@@ -227,7 +267,14 @@ export function BoardFeatures({
       if (!restore) return;
       const old = await readVersion(editor.document.id, restore.id);
       await checkpoint(editor.document);
-      editor.commit(old.elements, "Восстановление версии", old.title);
+      const pages = pagesOf(old);
+      editor.commitWorkspace(
+        old.elements.map((e) => (e.pageId ? e : { ...e, pageId: pages[0].id })),
+        pages,
+        "Восстановление версии",
+        editor.activePageId,
+        old.title,
+      );
       await flush();
       setRestore(null);
       setHistory(false);
@@ -358,7 +405,39 @@ export function BoardFeatures({
                 Нарисовать фрейм
               </Button>
               {!!frames.length && (
-                <Button onClick={onPresent}>Начать презентацию</Button>
+                <>
+                  <Button onClick={onPresent}>Начать презентацию</Button>
+                  <div className="panel-inline-actions">
+                    <Checkbox
+                      label="Только непросмотренные"
+                      checked={unviewedOnly}
+                      onChange={(_, data) => setUnviewedOnly(!!data.checked)}
+                    />
+                    <Menu>
+                      <MenuTrigger disableButtonEnhancement>
+                        <Button
+                          size="small"
+                          appearance="subtle"
+                          aria-label="Отметки просмотра"
+                        >
+                          …
+                        </Button>
+                      </MenuTrigger>
+                      <MenuPopover>
+                        <MenuList>
+                          <MenuItem
+                            onClick={() => review.mark(frames.map((f) => f.id))}
+                          >
+                            Отметить все просмотренными
+                          </MenuItem>
+                          <MenuItem onClick={() => review.clear()}>
+                            Снять отметки на странице
+                          </MenuItem>
+                        </MenuList>
+                      </MenuPopover>
+                    </Menu>
+                  </div>
+                </>
               )}
               {!frames.length && (
                 <p className="panel-hint">
@@ -367,7 +446,7 @@ export function BoardFeatures({
                 </p>
               )}
               <div className="navigation-list">
-                {frames.map((e) => (
+                {listedFrames.map((e) => (
                   <div className="frame-item" key={e.id}>
                     <div className="layer-arrows">
                       <button
@@ -386,10 +465,29 @@ export function BoardFeatures({
                     <button
                       className="navigation-item"
                       onClick={() => editor.focusElement(e.id)}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        editor.selectObject(e.id);
+                        const workspace = event.currentTarget
+                          .closest(".workspace")!
+                          .getBoundingClientRect();
+                        const button =
+                          event.currentTarget.getBoundingClientRect();
+                        editor.contextMenu = {
+                          x:
+                            (event.clientX || button.left + button.width / 2) -
+                            workspace.left,
+                          y:
+                            (event.clientY || button.top + button.height / 2) -
+                            workspace.top,
+                        };
+                        editor.emit("ui");
+                      }}
                     >
                       <span>{e.text || "Фрейм"}</span>
                       <small>
                         {Math.round(e.width)} × {Math.round(e.height)}
+                        {viewed.has(e.id) ? " · Просмотрено" : ""}
                       </small>
                     </button>
                     <Button
@@ -403,6 +501,11 @@ export function BoardFeatures({
                   </div>
                 ))}
               </div>
+              {!!frames.length && !listedFrames.length && (
+                <p className="panel-hint">
+                  Все фреймы этой страницы просмотрены.
+                </p>
+              )}
             </>
           )}
         </aside>
@@ -509,8 +612,14 @@ export function BoardFeatures({
           className="board-context floating"
           aria-label="Контекстное меню доски"
           style={{
-            left: Math.min(at.x, editor.viewport.width - 228),
-            top: Math.min(at.y, editor.viewport.height - 370),
+            left: Math.max(4, Math.min(at.x, editor.viewport.width - 228)),
+            top: Math.max(4, Math.min(at.y, editor.viewport.height - 370)),
+            maxHeight: Math.max(
+              120,
+              editor.viewport.height -
+                Math.max(4, Math.min(at.y, editor.viewport.height - 370)) -
+                8,
+            ),
           }}
           onKeyDown={(e) => {
             if (e.key === "Escape") {
@@ -537,16 +646,69 @@ export function BoardFeatures({
           <Button
             role="menuitem"
             appearance="subtle"
-            onClick={() => action(() => editor.paste())}
+            onClick={() =>
+              action(() => {
+                const paste = editor.services.get("fragment_paste");
+                if (paste)
+                  void paste({})
+                    .then((r: any) => {
+                      if (!r.handled) editor.paste();
+                    })
+                    .catch((e) => onError(String(e)));
+                else editor.paste();
+              })
+            }
           >
             Вставить объекты <kbd>Ctrl+V</kbd>
           </Button>
           {!!editor.selected.size && (
             <>
+              {editor.selection.some((e) => e.kind === "frame") && (
+                <Button
+                  role="menuitem"
+                  appearance="subtle"
+                  onClick={() =>
+                    action(() => {
+                      const frames = editor.selection.filter(
+                        (e) => e.kind === "frame",
+                      );
+                      review.mark(
+                        frames.map((e) => e.id),
+                        !frames.every((e) => review.has(e.id)),
+                      );
+                    })
+                  }
+                >
+                  {editor.selection
+                    .filter((e) => e.kind === "frame")
+                    .every((e) => review.has(e.id))
+                    ? "Снять отметку просмотра"
+                    : "Отметить просмотренным"}
+                </Button>
+              )}
               <Button
                 role="menuitem"
                 appearance="subtle"
-                onClick={() => action(() => editor.copy())}
+                onClick={() =>
+                  action(() => {
+                    void editor.services.get("fragment_ui")?.({
+                      action: "open",
+                    });
+                  })
+                }
+              >
+                Перенести фрагмент…
+              </Button>
+              <Button
+                role="menuitem"
+                appearance="subtle"
+                onClick={() =>
+                  action(() => {
+                    const copy = editor.services.get("fragment_copy");
+                    if (copy) void copy({}).catch((e) => onError(String(e)));
+                    else editor.copy();
+                  })
+                }
               >
                 Копировать <kbd>Ctrl+C</kbd>
               </Button>

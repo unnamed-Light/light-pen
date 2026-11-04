@@ -391,8 +391,11 @@ test("image import and PNG export produce a real nonempty image", async ({
   await expect.poll(async () => (await scene(page)).elements.length).toBe(1);
   expect((await scene(page)).elements[0].kind).toBe("image");
   await page.getByRole("button", { name: "Меню файла" }).click();
+  await page.getByRole("menuitem", { name: "Экспортировать…",exact:true }).click();
+  const dialog=page.getByRole('dialog',{name:'Экспорт доски',exact:true});
+  await dialog.getByLabel('Формат экспорта',{exact:true}).selectOption('png');
   const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("menuitem", { name: "Экспортировать PNG…" }).click();
+  await dialog.getByRole('button',{name:'Экспортировать',exact:true}).click();
   const download = await downloadPromise;
   const file = testInfo.outputPath("export.png");
   await download.saveAs(file);

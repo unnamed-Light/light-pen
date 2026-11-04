@@ -170,7 +170,7 @@ function download(blob: Blob, name: string) {
 export async function saveDataText(
   data: string,
   title: string,
-  format: "csv" | "tsv" | "md" | "json" | "opml",
+  format: "csv" | "tsv" | "md" | "json" | "opml" | "lightpen-fragment",
 ) {
   const name = title.replace(/[<>:"/\\|?*]/g, "_");
   if (native) {
@@ -220,6 +220,36 @@ export async function saveVector(
       }),
       `${title}.${format}`,
     );
+  return true;
+}
+export async function saveGeneratedExport(
+  blob: Blob,
+  title: string,
+  extension: "png" | "svg" | "pdf" | "zip",
+  onPicked: () => void = () => {},
+): Promise<boolean> {
+  const name = title.replace(/[<>:"/\\|?*]/g, "_");
+  if (!native) {
+    onPicked();
+    download(blob, `${name}.${extension}`);
+    return true;
+  }
+  const path = await save({
+    title: `Экспорт ${extension.toUpperCase()}`,
+    defaultPath: `${name}.${extension}`,
+    filters: [{ name: extension.toUpperCase(), extensions: [extension] }],
+  });
+  onPicked();
+  if (!path) return false;
+  const data = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  for (let i = 0; i < data.length; i += 8192)
+    binary += String.fromCharCode(...data.subarray(i, i + 8192));
+  await invoke("export_binary", {
+    path: suffix(path, extension),
+    data: btoa(binary),
+    format: extension,
+  });
   return true;
 }
 export async function chooseLocalLink(): Promise<string | null> {

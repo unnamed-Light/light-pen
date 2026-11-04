@@ -9,8 +9,9 @@ import {
   DialogActions,
 } from "@fluentui/react-components";
 import type { Editor } from "../editor/editor";
-import { createDocument, uid, validateDocument } from "../editor/model/types";
-import type { SceneElement } from "../editor/model/types";
+import { uid, validateDocument } from "../editor/model/types";
+import type { BoardPage, SceneElement } from "../editor/model/types";
+import { pagesOf } from "../editor/model/pages";
 import {
   gridOf,
   insertTableRow,
@@ -37,8 +38,13 @@ export function StructuredEditor({
     [error, setError] = useState(""),
     [query, setQuery] = useState<DataQuery>({}),
     [working, setWorking] = useState(false),
+    [targetPages, setTargetPages] = useState<BoardPage[]>(
+      draft.link?.path ? [] : editor.pages,
+    ),
     [targets, setTargets] = useState<SceneElement[]>(
-      draft.link?.path ? [] : editor.elements.filter((e) => e.id !== draft.id),
+      draft.link?.path
+        ? []
+        : editor.document.elements.filter((e) => e.id !== draft.id),
     );
   const close = () => {
     editor.objectDraft = null;
@@ -48,9 +54,21 @@ export function StructuredEditor({
   const patch = (p: Partial<SceneElement>) => setDraft((d) => ({ ...d, ...p }));
   const save = () => {
     try {
-      if (isLink && !draft.link?.path && !draft.link?.elementId)
-        throw new Error("Выберите файл или объект, на который ведёт ссылка.");
-      validateDocument({ ...createDocument(), elements: [draft] });
+      if (
+        isLink &&
+        !draft.link?.path &&
+        !draft.link?.elementId &&
+        !draft.link?.pageId
+      )
+        throw new Error(
+          "Выберите страницу, файл или объект, на который ведёт ссылка.",
+        );
+      validateDocument({
+        ...editor.document,
+        schemaVersion: 5,
+        pages: editor.pages,
+        elements: [{ ...draft, pageId: editor.activePageId }],
+      });
       editor.saveObjectDraft(draft);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -79,16 +97,16 @@ export function StructuredEditor({
     try {
       const path = await chooseLocalLink();
       if (path) {
+        const target = path.toLowerCase().endsWith(".lightpen")
+          ? await readDocument(path)
+          : null;
         patch({
-          link: { ...draft.link, path },
+          link: { path, label: draft.link?.label },
           text:
             draft.text === "Ссылка" ? path.split(/[\\/]/).at(-1) : draft.text,
         });
-        setTargets(
-          path.toLowerCase().endsWith(".lightpen")
-            ? (await readDocument(path)).elements
-            : [],
-        );
+        setTargets(target?.elements ?? []);
+        setTargetPages(target ? pagesOf(target) : []);
       }
     } catch (e) {
       setError(String(e));
@@ -401,7 +419,7 @@ export function StructuredEditor({
                   <input
                     aria-label="Путь ссылки"
                     maxLength={4096}
-                    placeholder="Пусто — объект текущей доски"
+                    placeholder="Пусто — страница или объект этого пространства"
                     value={draft.link?.path ?? ""}
                     onChange={(e) => {
                       patch({
@@ -413,8 +431,11 @@ export function StructuredEditor({
                       setTargets(
                         e.target.value
                           ? []
-                          : editor.elements.filter((v) => v.id !== draft.id),
+                          : editor.document.elements.filter(
+                              (v) => v.id !== draft.id,
+                            ),
                       );
+                      setTargetPages(e.target.value ? [] : editor.pages);
                     }}
                   />
                 </label>
@@ -424,27 +445,73 @@ export function StructuredEditor({
                 >
                   Выбрать локальный файл…
                 </Button>
+                {targetPages.length > 0 && (
+                  <label className="field-label">
+                    Страница
+                    <select
+                      aria-label="Страница назначения"
+                      value={draft.link?.pageId ?? ""}
+                      onChange={(e) =>
+                        patch({
+                          link: {
+                            path: "",
+                            ...draft.link,
+                            pageId: e.target.value || undefined,
+                            elementId: undefined,
+                          },
+                        })
+                      }
+                    >
+                      <option value="">
+                        {draft.link?.path
+                          ? "Первая страница"
+                          : "Текущая страница"}
+                      </option>
+                      {targetPages.map((page) => (
+                        <option value={page.id} key={page.id}>
+                          {page.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <label className="field-label">
                   Объект или фрейм
                   <select
                     aria-label="Объект назначения"
                     value={draft.link?.elementId ?? ""}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      const target = targets.find(
+                        (t) => t.id === e.target.value,
+                      );
                       patch({
                         link: {
                           path: "",
                           ...draft.link,
+                          ...(target
+                            ? { pageId: target.pageId ?? targetPages[0]?.id }
+                            : {}),
                           elementId: e.target.value || undefined,
                         },
-                      })
-                    }
+                      });
+                    }}
                   >
                     <option value="">Вся доска / файл</option>
-                    {targets.slice(0, 500).map((e) => (
-                      <option value={e.id} key={e.id}>
-                        {e.name || e.text?.slice(0, 60) || e.kind}
-                      </option>
-                    ))}
+                    {targets
+                      .filter(
+                        (e) =>
+                          (e.pageId ?? targetPages[0]?.id) ===
+                          (draft.link?.pageId ??
+                            (draft.link?.path
+                              ? targetPages[0]?.id
+                              : editor.activePageId)),
+                      )
+                      .slice(0, 500)
+                      .map((e) => (
+                        <option value={e.id} key={e.id}>
+                          {e.name || e.text?.slice(0, 60) || e.kind}
+                        </option>
+                      ))}
                   </select>
                 </label>
                 <label className="field-label">
@@ -465,8 +532,8 @@ export function StructuredEditor({
                   />
                 </label>
                 <p className="panel-hint">
-                  Ссылка открывается кнопкой в свойствах. Если файл переехал,
-                  здесь можно выбрать его заново.
+                  Ctrl+щелчок открывает ссылку прямо на доске. Для выделенного
+                  объекта — Ctrl+Enter. Если файл переехал, выберите его заново.
                 </p>
               </>
             )}

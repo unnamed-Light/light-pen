@@ -60,7 +60,7 @@ import {
   readDocument,
   recentDocuments,
   restoreSession,
-  savePng,
+  saveGeneratedExport,
 } from "../platform/native";
 import type { RecentDocument } from "../platform/native";
 import { SaveCoordinator } from "../platform/persistence";
@@ -68,12 +68,22 @@ import { CanvasView } from "./CanvasView";
 import { ToolIcon } from "./ToolIcon";
 
 import { BoardFeatures } from "./BoardFeatures";
+import { Pages } from "./Pages";
+import { Fragments } from "./Fragments";
+import { PluginHost } from "../plugins/host";
+import { PluginManager } from "./PluginManager";
 import { Studio, PropertyDock } from "./Studio";
 import { Minimap, Presentation, ZoomControls } from "./Navigation";
 import { ExportDialog } from "./ExportDialog";
 import type { ExportScope } from "./ExportDialog";
 import { parseTsv } from "../editor/model/tables";
-import { saveVector, openLocalFile } from "../platform/native";
+import { openLocalFile } from "../platform/native";
+import type {
+  ExportFormat,
+  ExportRequest,
+  ExportSnapshot,
+  ExportProgress,
+} from "../export";
 import { keyboardCode } from "../platform/keyboard";
 import { Collaboration } from "./Collaboration";
 import { credentialStore } from "../platform/credentials";
@@ -119,6 +129,15 @@ const TOOL_CODES: Record<string, Tool> = {
 export function App() {
   const [editor] = useState(() => new Editor());
   const [agent] = useState(() => new AgentController(editor));
+  const [plugins] = useState(() => new PluginHost(editor));
+  const [pluginsOpen, setPluginsOpenState] = useState(false);
+  const pluginsVisible = useRef(false);
+  pluginsVisible.current = pluginsOpen;
+  const setPluginsOpen = (open: boolean) => {
+    if (editor.agentPanel?.kind === "plugins") editor.agentPanel = null;
+    pluginsVisible.current = open;
+    setPluginsOpenState(open);
+  };
   const [saver] = useState(
     () => new SaveCoordinator(backend, () => !editor.isInteracting),
   );
@@ -147,6 +166,8 @@ export function App() {
     importInput = useRef<HTMLInputElement>(null),
     closing = useRef(false),
     actionLock = useRef(false);
+  const exportAbort = useRef<AbortController | null>(null);
+  const [exportProgress, setExportProgress] = useState<ExportProgress>();
   const helpOpen = useRef(help),
     exportDialogOpen = useRef(exportOpen);
   helpOpen.current = help;
@@ -166,28 +187,55 @@ export function App() {
   }, []);
   useEffect(
     () =>
-      installApplicationCommands(agent, saver, () => painter.current, {
-        theme: setDark,
-        present: setPresenting,
-        help: () => {
-          setHelp(true);
-          editor.agentPanel = {
-            kind: "help",
-            close: () => setHelp(false),
-            isOpen: () => helpOpen.current,
-          };
+      installApplicationCommands(
+        agent,
+        saver,
+        () => painter.current,
+        {
+          theme: setDark,
+          present: setPresenting,
+          help: () => {
+            setHelp(true);
+            editor.agentPanel = {
+              kind: "help",
+              close: () => setHelp(false),
+              isOpen: () => helpOpen.current,
+            };
+          },
+          export: () => {
+            setExportOpen(true);
+            editor.agentPanel = {
+              kind: "export",
+              close: () => setExportOpen(false),
+              isOpen: () => exportDialogOpen.current,
+            };
+          },
         },
-        export: () => {
-          setExportOpen(true);
-          editor.agentPanel = {
-            kind: "export",
-            close: () => setExportOpen(false),
-            isOpen: () => exportDialogOpen.current,
-          };
-        },
-      }),
-    [agent, saver],
+        plugins,
+      ),
+    [agent, saver, plugins],
   );
+  useEffect(() => {
+    const show = async (a: Record<string, any>) => {
+      setPluginsOpen(true);
+      if (a.agent)
+        editor.agentPanel = {
+          kind: "plugins",
+          close: () => setPluginsOpen(false),
+          isOpen: () => pluginsVisible.current,
+        };
+      return { opened: true };
+    };
+    editor.services.set("plugins_ui", show);
+    void plugins.ready.catch((e) =>
+      setError(String(e instanceof Error ? e.message : e)),
+    );
+    return () => {
+      if (editor.services.get("plugins_ui") === show)
+        editor.services.delete("plugins_ui");
+      plugins.dispose();
+    };
+  }, [editor, plugins]);
   useEffect(() => {
     agent.guard = (changesUi) => {
       if (!ready || busy || waitingForFile || closing.current)
@@ -347,9 +395,11 @@ export function App() {
         editor.commitText();
         editor.endStyle();
         editor.cancelGesture();
+        editor.savePageView();
         editor.enabled = false;
         try {
           agent.disable();
+          plugins.dispose();
           await invoke("agent_stop");
           await editor.beforeClose?.();
           await credentialStore.flush();
@@ -420,63 +470,96 @@ export function App() {
   const exportBoard = useCallback(
     (frameId?: string) =>
       action(async () => {
-        if (!painter.current) return;
-        const result = await painter.current.exportPng(
-          editor.selected.size > 0,
+        const { captureExportSnapshot, generateExport } =
+          await import("../export");
+        const snapshot = captureExportSnapshot(editor.document, {
+          activePageId: editor.activePageId,
+          selectionIds: editor.selected,
+        });
+        const result = await generateExport(snapshot, {
+          format: "png",
+          scope: frameId
+            ? "frame"
+            : editor.selected.size
+              ? "selection"
+              : "page",
           frameId,
-        );
+          scale: 2,
+        });
         setWaitingForFile(true);
         if (
-          await savePng(result.dataUrl, editor.document.title, () =>
-            setWaitingForFile(false),
+          await saveGeneratedExport(
+            result.blob,
+            editor.document.title,
+            "png",
+            () => setWaitingForFile(false),
           )
         )
-          notify(`PNG сохранён · ${result.width} × ${result.height}`);
+          notify(`PNG сохранён · ${result.plan.width} × ${result.plan.height}`);
       }),
     [action, editor, notify],
   );
-  const exportDocument = (format: "png" | "svg" | "pdf", scope: ExportScope) =>
+  const exportDocument = (
+    _format: ExportFormat,
+    _scope: ExportScope,
+    request: ExportRequest,
+    snapshot?: ExportSnapshot,
+  ) =>
     void action(async () => {
-      const ids = scope === "selection" ? new Set(editor.selected) : undefined;
-      let data: string | Uint8Array;
-      if (format === "png") {
-        if (!painter.current) return;
-        const png = await painter.current.exportPng(scope === "selection");
+      const abort = new AbortController();
+      exportAbort.current = abort;
+      setExportProgress(undefined);
+      try {
+        const { captureExportSnapshot, generateExport } =
+          await import("../export");
+        const captured =
+          snapshot ??
+          captureExportSnapshot(editor.document, {
+            activePageId: editor.activePageId,
+            selectionIds: editor.selected,
+          });
+        const result = await generateExport(captured, request, {
+          signal: abort.signal,
+          onProgress: setExportProgress,
+        });
         setWaitingForFile(true);
         if (
-          await savePng(png.dataUrl, editor.document.title, () =>
-            setWaitingForFile(false),
+          await saveGeneratedExport(
+            result.blob,
+            captured.document.title,
+            result.extension,
+            () => setWaitingForFile(false),
           )
-        )
-          notify("PNG сохранён");
-      } else {
-        const { exportSvg, exportPdf } =
-          await import("../editor/render/vector-export");
-        data =
-          format === "svg"
-            ? (await exportSvg(editor.document, { ids })).svg
-            : await exportPdf(editor.document, {
-                ids,
-                frames: scope === "slides" ? editor.slides : undefined,
-              });
-        setWaitingForFile(true);
-        if (await saveVector(data, editor.document.title, format))
-          notify(`${format.toUpperCase()} сохранён`);
+        ) {
+          notify(`${result.extension.toUpperCase()} сохранён`);
+          setExportOpen(false);
+        }
+      } catch (e) {
+        if (!abort.signal.aborted) throw e;
+        notify("Экспорт отменён");
+      } finally {
+        exportAbort.current = null;
+        setExportProgress(undefined);
       }
-      setExportOpen(false);
     });
   const linkRequest = editor.linkRequest;
   useEffect(() => {
     if (!linkRequest) return;
     editor.linkRequest = null;
     void action(async () => {
-      const { path, elementId } = linkRequest;
+      const { path, elementId, pageId } = linkRequest;
       if (!path) {
-        if (!elementId || !editor.elements.some((e) => e.id === elementId))
+        if (
+          (elementId &&
+            !editor.document.elements.some((e) => e.id === elementId)) ||
+          (!elementId &&
+            (!pageId || !editor.pages.some((p) => p.id === pageId)))
+        )
           throw new Error(
             "Объект по ссылке не найден. Проверьте назначение ссылки.",
           );
-        editor.focusElement(elementId);
+        if (elementId) editor.focusElement(elementId);
+        else editor.switchPage(pageId!);
         return;
       }
       if (path.toLowerCase().endsWith(".lightpen")) {
@@ -486,10 +569,17 @@ export function App() {
           throw new Error(
             "Файл найден, но объект по ссылке удалён. Выберите новое назначение.",
           );
+        if (
+          !elementId &&
+          pageId &&
+          !(doc.pages ?? [{ id: "main" }]).some((p) => p.id === pageId)
+        )
+          throw Error("Страница по ссылке не найдена.");
         editor.setDocument(doc);
         saver.reset(path);
         saver.schedule(doc);
         if (elementId) editor.focusElement(elementId);
+        else if (pageId) editor.switchPage(pageId);
         notify("Связанная доска открыта");
       } else await openLocalFile(path);
     });
@@ -597,7 +687,11 @@ export function App() {
           KeyY: () => editor.redo(),
           KeyD: () => editor.duplicate(),
           KeyA: () => editor.selectAll(),
-          KeyC: () => editor.copy(),
+          KeyC: () => {
+            const copy = editor.services.get("fragment_copy");
+            if (copy) void copy({}).catch((e) => setError(String(e)));
+            else editor.copy();
+          },
           Equal: () => editor.zoom(1.2),
           Minus: () => editor.zoom(1 / 1.2),
           Digit0: () => editor.zoom(1 / editor.camera.zoom),
@@ -666,6 +760,7 @@ export function App() {
       }
     };
     const unload = (e: BeforeUnloadEvent) => {
+      editor.savePageView();
       if (saver.status !== "saved") {
         e.preventDefault();
       }
@@ -717,6 +812,7 @@ export function App() {
       editor,
       saver,
       agent,
+      plugins,
       get renderer() {
         return painter.current;
       },
@@ -724,7 +820,7 @@ export function App() {
     return () => {
       delete target.__LIGHT_PEN_TEST__;
     };
-  }, [editor, saver]);
+  }, [editor, saver, plugins]);
 
   const status =
     saver.status === "error"
@@ -820,9 +916,32 @@ export function App() {
                 </MenuItem>
                 <MenuItem
                   icon={<ArrowDownload20Regular />}
-                  onClick={() => void exportBoard()}
+                  onClick={() => setExportOpen(true)}
                 >
-                  Экспортировать PNG…
+                  Экспортировать…
+                </MenuItem>
+                <MenuItem
+                  onClick={() =>
+                    void editor.services.get("fragment_ui")?.({
+                      action: "open",
+                    })
+                  }
+                >
+                  Перенести фрагмент…
+                </MenuItem>
+                <MenuItem
+                  onClick={() =>
+                    void editor.services.get("fragment_ui")?.({
+                      action: "import",
+                    })
+                  }
+                >
+                  Импортировать фрагмент…
+                </MenuItem>
+                <MenuItem
+                  onClick={() => void editor.services.get("plugins_ui")?.({})}
+                >
+                  Плагины…
                 </MenuItem>
                 <MenuDivider />
                 <MenuItem onClick={() => void loadExample()}>
@@ -883,6 +1002,11 @@ export function App() {
             </Tooltip>
           </div>
           <div className="header-actions">
+            <Pages
+              editor={editor}
+              onError={setError}
+              disabled={busy || !ready}
+            />
             <AgentAccess agent={agent} ready={ready && !busy} />
             <Collaboration
               editor={editor}
@@ -964,6 +1088,7 @@ export function App() {
           </div>
         </header>
         <main className="workspace">
+          <Fragments editor={editor} notify={notify} onError={setError} />
           <CanvasView editor={editor} dark={dark} onRenderer={rendererReady} />
           <BoardFeatures
             editor={editor}
@@ -1122,11 +1247,23 @@ export function App() {
         </main>
         {exportOpen && (
           <ExportDialog
+            document={editor.document}
+            activePageId={editor.activePageId}
+            selectionIds={editor.selected}
             hasSelection={editor.selected.size > 0}
             hasFrames={editor.slides.length > 0}
             busy={busy}
+            progress={exportProgress}
+            onCancel={() => exportAbort.current?.abort()}
             onClose={() => setExportOpen(false)}
             onExport={exportDocument}
+          />
+        )}
+        {pluginsOpen && (
+          <PluginManager
+            host={plugins}
+            open={pluginsOpen}
+            onOpenChange={setPluginsOpen}
           />
         )}
         <input
@@ -1275,6 +1412,7 @@ declare global {
       saver: SaveCoordinator;
       renderer: BoardRenderer | null;
       agent: AgentController;
+      plugins: PluginHost;
       load?: (doc: BoardDocument) => void;
     };
   }

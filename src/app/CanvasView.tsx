@@ -2,11 +2,18 @@ import {
   useEffect,
   useLayoutEffect,
   useRef,
+  useState,
   useSyncExternalStore,
 } from "react";
 import type { Editor } from "../editor/editor";
 import { clamp, screenToWorld, rotationCenter } from "../editor/model/geometry";
 import { BoardRenderer } from "../editor/render/renderer";
+import { keyboardCode } from "../platform/keyboard";
+import type { LocalLink } from "../editor/model/types";
+
+function usableLink(link: LocalLink | null | undefined): link is LocalLink {
+  return !!(link && (link.path || link.pageId || link.elementId));
+}
 
 export function CanvasView({
   editor,
@@ -22,6 +29,7 @@ export function CanvasView({
     host = useRef<HTMLDivElement>(null),
     text = useRef<HTMLTextAreaElement>(null);
   const renderer = useRef<BoardRenderer | null>(null);
+  const [linkHover, setLinkHover] = useState(false);
   useSyncExternalStore(editor.subscribeUi, editor.getSnapshot);
   useSyncExternalStore(editor.subscribeCamera, editor.getCameraSnapshot);
   useEffect(() => {
@@ -36,6 +44,14 @@ export function CanvasView({
     observer.observe(container);
     painter.resize(container.clientWidth, container.clientHeight);
     const touch = new Map<number, { x: number; y: number }>();
+    const linkPointers = new Set<number>();
+    let lastPointer: { x: number; y: number } | null = null;
+    let hoveringLink = false;
+    const hoverLink = (value: boolean) => {
+      if (hoveringLink === value) return;
+      hoveringLink = value;
+      setLinkHover(value);
+    };
     let penActive = false;
     let pinch: {
       distance: number;
@@ -52,10 +68,35 @@ export function CanvasView({
       pointerType: e.pointerType,
       time: e.timeStamp,
     });
+    const linkAt = (point: { x: number; y: number }) => {
+      const link = editor.pick(screenToWorld(point, editor.camera), true)?.link;
+      return usableLink(link) ? link : null;
+    };
+    const openLink = (link: NonNullable<typeof editor.linkRequest>) => {
+      editor.cancelGesture();
+      editor.linkRequest = structuredClone(link);
+      editor.emit("ui");
+    };
     const down = (e: PointerEvent) => {
       if (e.pointerType === "touch" && penActive) return;
       e.preventDefault();
       canvas.focus({ preventScroll: true });
+      linkPointers.delete(e.pointerId);
+      if (
+        e.button === 0 &&
+        (e.ctrlKey || e.metaKey) &&
+        editor.enabled &&
+        !editor.isInteracting &&
+        !editor.replay &&
+        !editor.presenting
+      ) {
+        const link = linkAt(position(e));
+        if (link) {
+          linkPointers.add(e.pointerId);
+          openLink(link);
+          return;
+        }
+      }
       if (e.pointerType === "pen") {
         penActive = true;
         if (touch.size) {
@@ -91,6 +132,11 @@ export function CanvasView({
         canvas.setPointerCapture(e.pointerId);
     };
     const move = (e: PointerEvent) => {
+      lastPointer = position(e);
+      hoverLink(
+        !!((e.ctrlKey || e.metaKey) && !editor.gesture && linkAt(lastPointer)),
+      );
+      if (linkPointers.has(e.pointerId)) return;
       if (e.pointerType === "touch" && penActive) return;
       if (touch.has(e.pointerId)) touch.set(e.pointerId, position(e));
       if (pinch) {
@@ -122,6 +168,7 @@ export function CanvasView({
         );
     };
     const up = (e: PointerEvent) => {
+      if (linkPointers.delete(e.pointerId)) return;
       if (e.pointerType === "pen") penActive = false;
       touch.delete(e.pointerId);
       if (pinch) {
@@ -138,6 +185,7 @@ export function CanvasView({
         canvas.releasePointerCapture(e.pointerId);
     };
     const cancel = (e: PointerEvent) => {
+      linkPointers.delete(e.pointerId);
       touch.delete(e.pointerId);
       if (e.pointerType === "pen") penActive = false;
       pinch = null;
@@ -163,6 +211,7 @@ export function CanvasView({
         });
     };
     const dbl = (e: MouseEvent) => {
+      if (e.ctrlKey || e.metaKey) return;
       const r = canvas.getBoundingClientRect();
       editor.doubleClick({ x: e.clientX - r.left, y: e.clientY - r.top });
     };
@@ -172,11 +221,42 @@ export function CanvasView({
       editor.showContextMenu({ x: e.clientX - r.left, y: e.clientY - r.top });
     };
     const blur = () => {
+      linkPointers.clear();
+      lastPointer = null;
+      hoverLink(false);
       editor.spaceHeld = false;
       editor.cancelGesture();
       touch.clear();
       pinch = null;
       penActive = false;
+    };
+    const leave = () => {
+      lastPointer = null;
+      hoverLink(false);
+    };
+    const key = (e: KeyboardEvent) => {
+      if (
+        e.target !== canvas ||
+        !editor.enabled ||
+        editor.isInteracting ||
+        editor.presenting ||
+        editor.replay
+      )
+        return;
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        e.type === "keydown" &&
+        keyboardCode(e) === "Enter" &&
+        editor.selection.length === 1 &&
+        usableLink(editor.selection[0].link)
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!e.repeat) openLink(editor.selection[0].link);
+      } else
+        hoverLink(
+          !!((e.ctrlKey || e.metaKey) && lastPointer && linkAt(lastPointer)),
+        );
     };
     const resize = () =>
       painter.resize(container.clientWidth, container.clientHeight);
@@ -188,6 +268,9 @@ export function CanvasView({
     canvas.addEventListener("wheel", wheel, { passive: false });
     canvas.addEventListener("dblclick", dbl);
     canvas.addEventListener("contextmenu", context);
+    canvas.addEventListener("pointerleave", leave);
+    canvas.addEventListener("keydown", key);
+    canvas.addEventListener("keyup", key);
     window.addEventListener("blur", blur);
     window.addEventListener("resize", resize);
     return () => {
@@ -203,6 +286,9 @@ export function CanvasView({
       canvas.removeEventListener("wheel", wheel);
       canvas.removeEventListener("dblclick", dbl);
       canvas.removeEventListener("contextmenu", context);
+      canvas.removeEventListener("pointerleave", leave);
+      canvas.removeEventListener("keydown", key);
+      canvas.removeEventListener("keyup", key);
       window.removeEventListener("blur", blur);
       window.removeEventListener("resize", resize);
     };
@@ -217,17 +303,19 @@ export function CanvasView({
   }, [editing?.element.id]);
   const c = editor.camera,
     el = editing?.element;
-  const cursor = editor.replay
-    ? "default"
-    : editor.spaceHeld || editor.tool === "hand"
-      ? "grab"
-      : editor.tool === "select"
-        ? "default"
-        : editor.tool === "text"
-          ? "text"
-          : editor.tool === "eraser"
-            ? "none"
-            : "crosshair";
+  const cursor = linkHover
+    ? "pointer"
+    : editor.replay
+      ? "default"
+      : editor.spaceHeld || editor.tool === "hand"
+        ? "grab"
+        : editor.tool === "select"
+          ? "default"
+          : editor.tool === "text"
+            ? "text"
+            : editor.tool === "eraser"
+              ? "none"
+              : "crosshair";
   return (
     <div className="canvas-host" ref={host} data-testid="canvas-host">
       <canvas className="board-canvas" ref={main} aria-hidden="true" />
@@ -237,6 +325,14 @@ export function CanvasView({
         tabIndex={0}
         role="application"
         aria-label="Интерактивная доска"
+        title={
+          linkHover
+            ? "Открыть ссылку · Ctrl+щелчок"
+            : editor.selection.length === 1 &&
+                usableLink(editor.selection[0].link)
+              ? "Открыть ссылку выделенного объекта · Ctrl+Enter"
+              : undefined
+        }
         style={{ cursor }}
         data-testid="board"
       />

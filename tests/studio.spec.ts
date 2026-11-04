@@ -308,7 +308,19 @@ test("local template library survives reload, transfers a file, and remaps all i
   const path = info.outputPath("fragment.lightpen-template");
   await download.saveAs(path);
   const exported = JSON.parse(await readFile(path, "utf8"));
-  expect(exported.elements).toEqual(source.elements);
+  expect(exported.elements).toHaveLength(source.elements.length);
+  expect(await scene(page)).toEqual(source);
+  for (let i = 0; i < source.elements.length; i++)
+    expect(exported.elements[i]).toMatchObject({
+      kind: source.elements[i].kind,
+      x: source.elements[i].x,
+      y: source.elements[i].y,
+      width: source.elements[i].width,
+      height: source.elements[i].height,
+      color: source.elements[i].color,
+    });
+  expect(exported.elements[1].link.elementId).toBe(exported.elements[0].id);
+  expect(exported.elements[1].groupId).toBe(exported.elements[0].groupId);
   await page.reload();
   await expect(page.getByTestId("app")).toHaveAttribute("data-ready", "true");
   await page
@@ -869,13 +881,10 @@ test("rotated frame exports clip vector and PNG contents and a bad formula abort
   await page
     .getByRole("combobox", { name: "Формат экспорта", exact: true })
     .selectOption("svg");
-  await page
-    .getByRole("button", { name: "Экспортировать", exact: true })
-    .click();
-  await expect(page.getByText(/Проверьте синтаксис/)).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText(/Проверьте синтаксис/);
   await expect(
     page.getByRole("button", { name: "Экспортировать", exact: true }),
-  ).toBeEnabled();
+  ).toBeDisabled();
 });
 
 test("presentation clips neighboring objects on wide screens and fit clears the contextual panel", async ({

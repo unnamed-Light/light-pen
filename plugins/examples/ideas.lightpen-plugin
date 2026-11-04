@@ -1,0 +1,146 @@
+{
+  "manifest": {
+    "apiVersion": 1,
+    "id": "lightpen.ideas",
+    "name": "Идеи и счётчик",
+    "version": "1.0.0",
+    "description": "Пример локального расширения: стикеры по сетке, виджет счётчика и сводка страницы. Работает без сети и файлов.",
+    "author": "Light Pen",
+    "runtime": "worker",
+    "permissions": [
+      "board:read",
+      "board:write"
+    ],
+    "commands": [
+      {
+        "id": "ideas",
+        "title": "Добавить идеи",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "count": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 12
+            },
+            "color": {
+              "type": "string",
+              "maxLength": 7
+            }
+          },
+          "required": [
+            "title",
+            "count",
+            "color"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "id": "counter",
+        "title": "Добавить счётчик",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "value": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            }
+          },
+          "required": [
+            "title",
+            "value"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "id": "increment",
+        "title": "Увеличить выбранные счётчики",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      {
+        "id": "summary",
+        "title": "Сводка страницы",
+        "readOnly": true,
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    ],
+    "panels": [
+      {
+        "id": "ideas",
+        "title": "Идеи по сетке",
+        "description": "Одна команда добавляет до 12 стикеров и отменяется одним действием.",
+        "command": "ideas",
+        "fields": [
+          {
+            "id": "title",
+            "label": "Тема",
+            "kind": "text",
+            "default": "Новая идея"
+          },
+          {
+            "id": "count",
+            "label": "Количество",
+            "kind": "number",
+            "default": 3,
+            "min": 1,
+            "max": 12
+          },
+          {
+            "id": "color",
+            "label": "Цвет стикеров",
+            "kind": "color",
+            "default": "#fff1a8"
+          }
+        ]
+      },
+      {
+        "id": "counter",
+        "title": "Счётчик",
+        "description": "Значение и подпись сохраняются в доске. Без расширения останется обычная читаемая карточка.",
+        "command": "counter",
+        "fields": [
+          {
+            "id": "title",
+            "label": "Подпись",
+            "kind": "text",
+            "default": "Готово"
+          },
+          {
+            "id": "value",
+            "label": "Значение",
+            "kind": "number",
+            "default": 0,
+            "min": 0,
+            "max": 100
+          }
+        ]
+      }
+    ],
+    "widgets": [
+      {
+        "type": "counter",
+        "title": "Счётчик"
+      }
+    ]
+  },
+  "code": "LightPen.register({\n  async ideas(args) {\n    if (!Number.isInteger(args.count)) throw Error('Количество должно быть целым');\n    const elements = Array.from({ length: args.count }, (_, i) => ({\n      kind: 'sticky', x: 160 + (i % 3) * 260, y: 160 + Math.floor(i / 3) * 190,\n      width: 230, height: 160, fill: args.color, text: args.title + ' ' + (i + 1),\n    }));\n    return LightPen.board.apply({ create: elements, label: 'Идеи расширения' });\n  },\n  async counter(args) {\n    return LightPen.widgets.create({ type: 'counter', data: { title: args.title, value: args.value },\n      fallback: args.title + '\\n' + args.value, x: 200, y: 180, width: 280, height: 180 });\n  },\n  async increment() {\n    const widgets = [];let offset = 0;\n    do {\n      const board = await LightPen.board.read({ selectionOnly: true, offset, limit: 200 });\n      widgets.push(...board.elements.filter(e => e.widget?.pluginId === 'lightpen.ideas' && e.widget.type === 'counter'));\n      offset = board.next;\n    } while (offset !== null);\n    if (!widgets.length) throw Error('Сначала выберите карточку счётчика на доске');\n    return LightPen.board.apply({ update: widgets.map(e => {\n      const data = { ...e.widget.data, value: Number(e.widget.data.value) + 1 };\n      const fallback = data.title + '\\n' + data.value;\n      return { id: e.id, patch: { widget: { ...e.widget, data, fallback }, text: fallback } };\n    }), label: 'Увеличение счётчика' });\n  },\n  async summary() {\n    const board = await LightPen.board.read();\n    const result = { objects: board.total, widgets: board.widgetCount };\n    await LightPen.ui.notify('Объектов: ' + result.objects + ', виджетов: ' + result.widgets);\n    return result;\n  },\n});\n"
+}

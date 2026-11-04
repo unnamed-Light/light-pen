@@ -15,6 +15,7 @@ Thumbs.db
 /boards/
 *.lightpen
 *.lightpen-template
+*.lightpen-fragment
 /.agents/
 /skills-lock.json
 .env

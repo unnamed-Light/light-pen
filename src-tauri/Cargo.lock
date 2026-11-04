@@ -1982,7 +1982,7 @@ dependencies = [
 
 [[package]]
 name = "light-pen"
-version = "0.5.0-beta.1"
+version = "0.6.0-beta.1"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.3.4",

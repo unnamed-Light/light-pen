@@ -1,28 +1,12 @@
-import { spawn, execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { createInterface } from "node:readline";
 import { chromium } from "@playwright/test";
 import { randomUUID, createHash } from "node:crypto";
 import { createServer } from "node:net";
+import { verifyWorkspace } from "./native-workspace-qa.mjs";
 const reservation = createServer();
-if (process.platform === "win32")
-  for (const name of [
-    "light-pen.exe",
-    "Light Pen Beta.exe",
-    "Light.Pen.Beta.exe",
-    "Light Pen Preview.exe",
-  ]) {
-    const result = execFileSync(
-      "tasklist",
-      ["/FO", "CSV", "/NH", "/FI", "IMAGENAME eq " + name],
-      { encoding: "utf8", windowsHide: true },
-    );
-    if (result.toLowerCase().includes('"' + name.toLowerCase() + '"'))
-      throw Error(
-        "Close existing Light Pen before native QA; current work will not be touched.",
-      );
-  }
 await new Promise((r) => reservation.listen(0, "127.0.0.1", r));
 const debugPort = reservation.address().port;
 await new Promise((r) => reservation.close(r));
@@ -114,8 +98,8 @@ try {
     clientInfo: { name: "Light Pen QA", version: "1" },
   });
   require(hello.serverInfo.version ===
-    "0.5.0-beta.1", "Wrong MCP executable version");
-  require((await rpc("tools/list")).tools.length === 20, "Catalog unavailable");
+    "0.6.0-beta.1", "Wrong MCP executable version");
+  require((await rpc("tools/list")).tools.length === 25, "Catalog unavailable");
   report.checks.push("offline_discovery");
   gui = spawn(exe, [], { env, windowsHide: true, stdio: "ignore" });
   await writeFile(
@@ -428,6 +412,7 @@ try {
   report.checks.push("native_hidden_table_export");
   require((await tool("board_read")).result.title ===
     "Нативная проверка ИИ", "Recent reopen replaced the source board");
+  await verifyWorkspace({ page, change, tool, files, profile, report });
   await change("document", { action: "save" });
   await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("agent_stop"));
   const revoked = await rpc("tools/call", {
@@ -436,7 +421,7 @@ try {
   });
   require(revoked.isError, "Revoked session still usable");
   require((await rpc("tools/list")).tools.length ===
-    20, "Revocation broke discovery");
+    25, "Revocation broke discovery");
   await page.evaluate(() =>
     window.__TAURI_INTERNALS__.invoke("agent_start", {
       write: false,

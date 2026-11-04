@@ -172,7 +172,7 @@ describe("Agent command contract", () => {
   it("discovers the complete tool set/resources only after explicit enable", async () => {
     const { a } = setup();
     const list = (await a.rpc("tools/list")) as any;
-    expect(list.tools).toHaveLength(20);
+    expect(list.tools).toHaveLength(25);
     expect(new Set(list.tools.map((t: any) => t.name)).size).toBe(
       list.tools.length,
     );

@@ -4,6 +4,11 @@ import type { SceneElement } from "../editor/model/types";
 import { bounds, intersects, translateElement } from "../editor/model/geometry";
 import { resolveBindings } from "../editor/model/relations";
 import {
+  pageElements,
+  replacePageElements,
+  elementPage,
+} from "../editor/model/pages";
+import {
   columnSummary,
   deleteTableAxis,
   gridOf,
@@ -88,6 +93,7 @@ export class AgentController {
     return {
       session: this.grant?.session,
       documentId: e.document.id,
+      pageId: e.activePageId,
       revision: e.document.revision,
       readOnly: e.readOnly,
       permissions: this.grant,
@@ -189,6 +195,7 @@ export class AgentController {
     if (!tool) throw Error("Unknown tool");
     validate(tool.inputSchema, args);
     const session = this.grant.session;
+    const observedPage = args.pageId ?? this.editor.activePageId;
     if (tool.annotations.destructiveHint && args.session !== session)
       throw Error("SESSION_CHANGED: read board again");
     if (tool.annotations.destructiveHint && !isReadAction(name, args)) {
@@ -216,8 +223,12 @@ export class AgentController {
       )
         throw Error("SESSION_FULL: start a new access session");
       if (this.busy) throw Error("BUSY: another agent operation is running");
-      this.checkRevision(args);
-      const result = this.runLocked(name, args, session);
+      this.checkRevision({ ...args, pageId: observedPage });
+      const result = this.runLocked(
+        name,
+        { ...args, pageId: observedPage },
+        session,
+      );
       this.receipts.set(args.requestId, { digest, result });
       const record = (value: unknown) => {
         if (
@@ -239,9 +250,20 @@ export class AgentController {
       return result;
     }
     if (this.busy) throw Error("BUSY: another agent operation is running");
-    return this.runLocked(name, args, session);
+    return this.runLocked(
+      name,
+      {
+        ...args,
+        ...(tool.annotations.destructiveHint ? { pageId: observedPage } : {}),
+      },
+      session,
+    );
   }
   private checkRevision(a: Record<string, any>) {
+    if (a.pageId !== undefined && a.pageId !== this.editor.activePageId)
+      throw Error(
+        "PAGE_CHANGED: active page changed while waiting; read board again",
+      );
     if (
       a.documentId !== this.editor.document.id ||
       a.expectedRevision !== this.editor.document.revision
@@ -274,7 +296,11 @@ export class AgentController {
       this.guard(closingAgentPanel ? false : changesUi);
       if (changesUi && (this.editor.isInteracting || !this.editor.enabled))
         throw Error("BUSY: finish the current gesture or editor first");
-      if (mutates && !this.grant.write)
+      if (
+        mutates &&
+        !this.grant.write &&
+        !(name === "plugins" && a.action === "invoke")
+      )
         throw Error("READ_ONLY: access session allows reading only");
       if (
         mutates &&
@@ -285,6 +311,9 @@ export class AgentController {
           "export",
           "templates",
           "versions",
+          "frame_review",
+          "pages",
+          "plugins",
         ].includes(name)
       )
         throw Error("READ_ONLY: room role is viewer");
@@ -328,6 +357,9 @@ export class AgentController {
           return this.inspect(a);
         case "edit_batch":
           result = await this.edit(a);
+          break;
+        case "pages":
+          result = this.pageCommand(a);
           break;
         case "history":
           if (this.editor.readOnly) throw Error("READ_ONLY");
@@ -400,7 +432,9 @@ export class AgentController {
               interval: taskInterval(e.task),
             })),
             counts: taskCounts(this.editor.elements, a.archived),
-            issues: Object.fromEntries(taskIssues(this.editor.elements)),
+            issues: Object.fromEntries(
+              taskIssues(this.editor.document.elements),
+            ),
           };
           break;
         }
@@ -418,6 +452,13 @@ export class AgentController {
     return {
       title: e.document.title,
       schemaVersion: e.document.schemaVersion,
+      activePageId: e.activePageId,
+      pages: e.pages
+        .slice(0, 100)
+        .map((p) => ({ ...p, pinned: e.isPagePinned(p.id) })),
+      pageCount: e.pages.length,
+      pageNext: e.pages.length > 100 ? 100 : null,
+      workspaceObjects: e.document.elements.length,
       objects: e.elements.length,
       kinds: e.elements.reduce(
         (a, x) => ({ ...a, [x.kind]: (a[x.kind] ?? 0) + 1 }),
@@ -450,14 +491,24 @@ export class AgentController {
     };
   }
   private readObjects(a: Record<string, any>) {
-    let all = this.editor.elements;
+    let all = a.workspace
+      ? this.editor.document.elements
+      : a.pageId
+        ? pageElements(this.editor.document, a.pageId)
+        : this.editor.elements;
     const ids = a.ids ? new Set(a.ids) : null;
-    const frame = a.frameId ? this.element(a.frameId, "frame") : null;
+    const frame = a.frameId
+      ? all.find((e) => e.id === a.frameId && e.kind === "frame")
+      : null;
+    if (a.frameId && !frame) throw Error("NOT_FOUND: frame");
     all = all.filter(
       (e) =>
         (!ids || ids.has(e.id)) &&
         (!a.kind || e.kind === a.kind) &&
-        (!frame || intersects(bounds(e), bounds(frame))) &&
+        (!frame ||
+          (elementPage(this.editor.document, e) ===
+            elementPage(this.editor.document, frame) &&
+            intersects(bounds(e), bounds(frame)))) &&
         (!a.search ||
           `${e.text ?? ""} ${e.name ?? ""} ${e.label ?? ""} ${JSON.stringify(e.cells ?? [])} ${JSON.stringify(e.task ?? {})}`
             .toLocaleLowerCase()
@@ -473,6 +524,7 @@ export class AgentController {
         const { dataUrl, points, ...rest } = e;
         return {
           ...rest,
+          pageId: elementPage(this.editor.document, e),
           bounds: bounds(e),
           ...(dataUrl
             ? {
@@ -504,6 +556,7 @@ export class AgentController {
         (e) => !e.hidden && (!selected || selected.has(e.id)),
       ),
       ids = new Set(this.editor.elements.map((e) => e.id)),
+      workspaceIds = new Set(this.editor.document.elements.map((e) => e.id)),
       links: unknown[] = [],
       overlaps: unknown[] = [];
     const max = a.maxPairs ?? 100;
@@ -520,7 +573,7 @@ export class AgentController {
         e.link &&
         !e.link.path &&
         e.link.elementId &&
-        !ids.has(e.link.elementId)
+        !workspaceIds.has(e.link.elementId)
       )
         links.push({
           id: e.id,
@@ -559,7 +612,7 @@ export class AgentController {
       overlaps,
       overlapScanTruncated: tested > 50000 || overlaps.length >= max,
       brokenLinks: links,
-      taskIssues: Object.fromEntries(taskIssues(this.editor.elements)),
+      taskIssues: Object.fromEntries(taskIssues(this.editor.document.elements)),
       invalidCells: cells,
     };
   }
@@ -569,11 +622,67 @@ export class AgentController {
       throw Error(`NOT_FOUND: ${kind ?? "object"} ${id}`);
     return e;
   }
+  private pageCommand(a: Record<string, any>) {
+    const e = this.editor;
+    if (a.action === "list")
+      return {
+        activePageId: e.activePageId,
+        total: e.pages.length,
+        pages: e.pages
+          .slice(
+            integer(a.offset ?? 0),
+            integer(a.offset ?? 0) + integer(a.limit ?? 100),
+          )
+          .map((p) => ({
+            ...p,
+            pinned: e.isPagePinned(p.id),
+            objects: pageElements(e.document, p.id).length,
+          })),
+      };
+    if (a.action === "search")
+      return this.readObjects({ ...a, workspace: true });
+    this.checkRevision(a);
+    switch (a.action) {
+      case "create":
+        return e.createPage(a.title);
+      case "switch":
+        required(a, "id");
+        e.switchPage(a.id);
+        return { activePageId: e.activePageId };
+      case "rename":
+        required(a, "id", "title");
+        e.renamePage(a.id, a.title);
+        break;
+      case "reorder":
+        required(a, "id", "index");
+        e.reorderPage(a.id, integer(a.index));
+        break;
+      case "duplicate":
+        required(a, "id");
+        return e.duplicatePage(a.id);
+      case "delete":
+        required(a, "id");
+        e.deletePage(a.id);
+        break;
+      case "move":
+      case "copy":
+        required(a, "ids", "targetPageId");
+        return {
+          ids: e.transferElements(a.ids, a.targetPageId, a.action === "copy"),
+        };
+      case "pin":
+        required(a, "id", "pinned");
+        e.pinPage(a.id, a.pinned);
+        break;
+    }
+    return { activePageId: e.activePageId, pages: e.pages };
+  }
   private async edit(a: Record<string, any>) {
     if (this.editor.readOnly) throw Error("READ_ONLY");
     const before = this.editor.document,
       stage = new Editor();
     stage.document = before;
+    stage.activePageId = this.editor.activePageId;
     stage.groupScope = [...this.editor.groupScope];
     stage.camera = { ...this.editor.camera };
     stage.viewport = { ...this.editor.viewport };
@@ -585,6 +694,15 @@ export class AgentController {
     };
     for (const op of a.operations as Record<string, any>[]) {
       if (op.op === "create") {
+        if (
+          op.elements.some(
+            (el: SceneElement) =>
+              el.pageId !== undefined && el.pageId !== stage.activePageId,
+          )
+        )
+          throw Error(
+            "PAGE_MISMATCH: create on active page or use pages transfer",
+          );
         const added = (op.elements as Partial<SceneElement>[]).map(
           (e) =>
             ({
@@ -621,6 +739,11 @@ export class AgentController {
           op.title.trim() || "Без названия",
         );
       else if (op.op === "update") {
+        if (
+          op.patch.pageId !== undefined &&
+          op.patch.pageId !== stage.activePageId
+        )
+          throw Error("PAGE_MISMATCH: use pages transfer");
         const old = this.element(op.id, undefined, stage);
         if (
           old.locked &&
@@ -652,7 +775,11 @@ export class AgentController {
     }
     const next = this.validator.validate({
       ...stage.document,
-      elements: resolveBindings(stage.elements),
+      elements: replacePageElements(
+        stage.document,
+        stage.activePageId,
+        resolveBindings(stage.elements),
+      ),
     });
     const oldIds = new Map(before.elements.map((e) => [e.id, e]));
     const assets = next.elements.filter(
@@ -691,11 +818,15 @@ export class AgentController {
       )
         throw Error(`LOCKED: ${old.id}`);
     if (changed.length || deleted.length || next.title !== before.title)
-      this.editor.commit(next.elements, a.label || "Изменения ИИ", next.title);
+      this.editor.commit(
+        pageElements(next, this.editor.activePageId),
+        a.label || "Изменения ИИ",
+        next.title,
+      );
     if (
       this.editor.document.title !== next.title ||
-      this.editor.elements.length !== next.elements.length ||
-      this.editor.elements.some(
+      this.editor.document.elements.length !== next.elements.length ||
+      this.editor.document.elements.some(
         (e, i) =>
           e !== next.elements[i] &&
           JSON.stringify(e) !== JSON.stringify(next.elements[i]),
@@ -908,6 +1039,10 @@ export class AgentController {
 }
 function isReadAction(name: string, a: Record<string, any>) {
   return (
+    (name === "pages" && ["list", "search"].includes(a.action)) ||
+    (name === "frame_review" && a.action === "list") ||
+    (name === "fragments" && ["read", "inspect"].includes(a.action)) ||
+    (name === "plugins" && ["list", "commands", "panels"].includes(a.action)) ||
     (["versions", "templates"].includes(name) &&
       ["list", "read"].includes(a.action)) ||
     (name === "document" && a.action === "list_recent") ||

@@ -25,6 +25,7 @@ import type { Role } from "../collaboration/client";
 import { credentialStore } from "../platform/credentials";
 import type { SavedRoom, SavedAccount } from "../platform/credentials";
 import { uid } from "../editor/model/types";
+import { reviewFor } from "../platform/review";
 
 type Account = {
   server: string;
@@ -75,6 +76,13 @@ export function Collaboration({
   const [savedRooms, setSavedRooms] = useState<SavedRoom[]>([]),
     [savedAccounts, setSavedAccounts] = useState<SavedAccount[]>([]);
   const [forget, setForget] = useState<SavedRoom | null>(null);
+  useEffect(() => {
+    reviewFor(editor).setIdentity(
+      account
+        ? `account:${account.server}:${account.user.login.toLocaleLowerCase()}`
+        : "local",
+    );
+  }, [editor, account]);
   const refreshSaved = async (guard?: NetworkGuard) => {
     guard?.();
     const value = await credentialStore.read();

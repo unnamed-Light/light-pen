@@ -1,10 +1,14 @@
-import type { SceneElement } from "../model/types";
+import type { SceneElement, BoardPage } from "../model/types";
 interface Entry {
   before: SceneElement[];
   after: SceneElement[];
   label: string;
   beforeTitle?: string;
   afterTitle?: string;
+  beforePages?: BoardPage[];
+  afterPages?: BoardPage[];
+  beforePageId?: string;
+  afterPageId?: string;
 }
 export class History {
   external: {
@@ -14,6 +18,8 @@ export class History {
     redo(): void;
   } | null = null;
   restoredTitle: string | undefined;
+  restoredPages: BoardPage[] | undefined;
+  restoredPageId: string | undefined;
   private past: Entry[] = [];
   private future: Entry[] = [];
   get canUndo() {
@@ -33,9 +39,23 @@ export class History {
     label: string,
     beforeTitle?: string,
     afterTitle?: string,
+    beforePages?: BoardPage[],
+    afterPages?: BoardPage[],
+    beforePageId?: string,
+    afterPageId?: string,
   ) {
     if (this.external) return;
-    this.past.push({ before, after, label, beforeTitle, afterTitle });
+    this.past.push({
+      before,
+      after,
+      label,
+      beforeTitle,
+      afterTitle,
+      beforePages,
+      afterPages,
+      beforePageId,
+      afterPageId,
+    });
     if (this.past.length > 100) this.past.shift();
     this.future = [];
   }
@@ -49,6 +69,8 @@ export class History {
     if (!e) return null;
     this.future.push(e);
     this.restoredTitle = e.beforeTitle;
+    this.restoredPages = e.beforePages;
+    this.restoredPageId = e.beforePageId;
     return e.before;
   }
   redo(): SceneElement[] | null {
@@ -61,6 +83,8 @@ export class History {
     if (!e) return null;
     this.past.push(e);
     this.restoredTitle = e.afterTitle;
+    this.restoredPages = e.afterPages;
+    this.restoredPageId = e.afterPageId;
     return e.after;
   }
   clear() {

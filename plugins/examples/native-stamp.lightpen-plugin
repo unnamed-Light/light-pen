@@ -1,0 +1,58 @@
+{
+  "manifest": {
+    "apiVersion": 1,
+    "id": "lightpen.native-stamp",
+    "name": "Нативная отметка",
+    "version": "1.0.0",
+    "description": "Расширенный пример JSON-lines для отдельного процесса Windows. Использует системный Windows PowerShell. Запускайте только после просмотра исходника и явного подтверждения доверия.",
+    "runtime": "process",
+    "permissions": [
+      "process",
+      "board:write"
+    ],
+    "commands": [
+      {
+        "id": "stamp",
+        "title": "Добавить отметку",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ],
+    "panels": [
+      {
+        "id": "stamp",
+        "title": "Отметка",
+        "command": "stamp",
+        "fields": [
+          {
+            "id": "text",
+            "label": "Текст отметки",
+            "kind": "text",
+            "default": "Нативный модуль работает"
+          }
+        ]
+      }
+    ],
+    "process": {
+      "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "args": [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "$ErrorActionPreference = 'Stop'\n[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)\n[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n$request = [Console]::ReadLine() | ConvertFrom-Json\nif ($request.kind -ne 'invoke' -or $request.command -ne 'stamp') { throw 'Unknown command' }\n$call = @{\n    kind = 'call'; id = 1; method = 'board.apply'\n    args = @{\n        create = @(@{ kind = 'sticky'; x = 200; y = 180; width = 300; height = 160; text = [string]$request.args.text; fill = '#d5edff' })\n        label = 'Native stamp'\n    }\n}\n[Console]::WriteLine(($call | ConvertTo-Json -Compress -Depth 8))\n$reply = [Console]::ReadLine() | ConvertFrom-Json\nif ($reply.error) {\n    [Console]::WriteLine((@{kind = 'error'; error = [string]$reply.error} | ConvertTo-Json -Compress))\n} else {\n    [Console]::WriteLine((@{kind = 'result'; result = @{created = $true}} | ConvertTo-Json -Compress -Depth 4))\n}\n"
+      ]
+    }
+  }
+}

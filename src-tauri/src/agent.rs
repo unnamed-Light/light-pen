@@ -496,6 +496,9 @@ pub async fn agent_file(
     if ![
         "lightpen",
         "lightpen-template",
+        "lightpen-fragment",
+        "lightpen-plugin",
+        "zip",
         "png",
         "jpg",
         "jpeg",
@@ -509,7 +512,16 @@ pub async fn agent_file(
     {
         return Err("Unsupported file type".into());
     }
-    if !["read_board", "read_image", "write_board", "write"].contains(&action.as_str()) {
+    if ![
+        "read_board",
+        "read_image",
+        "read_fragment",
+        "read_plugin",
+        "write_board",
+        "write",
+    ]
+    .contains(&action.as_str())
+    {
         return Err("Unsupported file action".into());
     }
     let writing = action.starts_with("write");
@@ -518,9 +530,10 @@ pub async fn agent_file(
     tauri::async_runtime::spawn_blocking(move||{
   match action.as_str(){
    "read_board"=>{if !["lightpen","lightpen-template"].contains(&format.as_str()){return Err("Expected a board file".into());}let(doc,_)=super::storage::read_document(&target)?;Ok(json!({"document":doc,"path":target}))},
+   "read_fragment"|"read_plugin"=>{let expected=if action=="read_fragment"{"lightpen-fragment"}else{"lightpen-plugin"};if format!=expected{return Err("File format mismatch".into());}let limit=if action=="read_fragment"{64*1024*1024}else{2*1024*1024};if fs::metadata(&target).map_err(|e|e.to_string())?.len()>limit{return Err("File exceeds size limit".into());}let text=fs::read_to_string(&target).map_err(|_|"Invalid UTF-8 file")?;serde_json::from_str::<Value>(&text).map_err(|_|"Invalid JSON file")?;Ok(json!({"text":text}))},
    "read_image"=>{if !["png","jpg","jpeg","webp"].contains(&format.as_str()){return Err("Expected a raster image".into());}if fs::metadata(&target).map_err(|e|e.to_string())?.len()>20*1024*1024{return Err("Image exceeds 20 MB".into());}let bytes=fs::read(&target).map_err(|e|e.to_string())?;let mime=match format.as_str(){"png"=>"image/png","webp"=>"image/webp",_=>"image/jpeg"};Ok(json!({"dataUrl":format!("data:{mime};base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes))}))},
    "write_board"=>{if !["lightpen","lightpen-template"].contains(&format.as_str()){return Err("Expected a board file".into());}let doc=document.ok_or("Missing document")?;write_target(&target,overwrite,|p|super::storage::atomic_save(p,&doc,None))?;Ok(json!({"path":target}))},
-   "write"=>{if ["lightpen","lightpen-template","jpg","jpeg","webp"].contains(&format.as_str()){return Err("Unsupported export type".into());}let data=data.ok_or("Missing export data")?;if data.len()>100_000_000{return Err("Export exceeds limit".into());}let bytes=if ["png","pdf"].contains(&format.as_str()){base64::engine::general_purpose::STANDARD.decode(data).map_err(|_|"Invalid base64")?}else{data.into_bytes()};if format=="png"&&!bytes.starts_with(b"\x89PNG\r\n\x1a\n")||format=="pdf"&&!bytes.starts_with(b"%PDF-")||format=="svg"&&!bytes.starts_with(b"<svg "){return Err("Invalid export header".into());}write_target(&target,overwrite,|p|super::storage::atomic_bytes(p,&bytes))?;Ok(json!({"path":target,"bytes":bytes.len()}))},_=>unreachable!()
+   "write"=>{if ["lightpen","lightpen-template","lightpen-plugin","jpg","jpeg","webp"].contains(&format.as_str()){return Err("Unsupported export type".into());}let data=data.ok_or("Missing export data")?;if data.len()>358_000_000{return Err("Export exceeds limit".into());}let bytes=if ["png","pdf","zip"].contains(&format.as_str()){base64::engine::general_purpose::STANDARD.decode(data).map_err(|_|"Invalid base64")?}else{data.into_bytes()};if bytes.len()>256*1024*1024{return Err("Export exceeds 256 MiB".into());}if format=="png"&&!bytes.starts_with(b"\x89PNG\r\n\x1a\n")||format=="pdf"&&!bytes.starts_with(b"%PDF-")||format=="svg"&&!bytes.starts_with(b"<svg ")||format=="zip"&&!bytes.starts_with(b"PK\x03\x04"){return Err("Invalid export header".into());}write_target(&target,overwrite,|p|super::storage::atomic_bytes(p,&bytes))?;Ok(json!({"path":target,"bytes":bytes.len()}))},_=>unreachable!()
   }
  }).await.map_err(|e|e.to_string())?
 }
@@ -756,7 +769,7 @@ mod tests {
         let tools = catalog["tools"].as_array().unwrap();
         let names: std::collections::HashSet<_> =
             tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(tools.len(), 20);
+        assert_eq!(tools.len(), 25);
         assert_eq!(tools.len(), names.len());
         assert!(names.contains("edit_batch"));
         assert!(names.contains("collaboration"));

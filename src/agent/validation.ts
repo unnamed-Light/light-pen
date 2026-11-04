@@ -11,6 +11,7 @@ export class CandidateValidator {
     const changed = doc.elements.filter((e) => !this.valid.has(e));
     validateDocument({ ...doc, elements: changed });
     const ids = new Set<string>();
+    const pageIds = new Set(doc.pages?.map((p) => p.id));
     let points = 0,
       bytes =
         this.encoder.encode(JSON.stringify({ ...doc, elements: [] })).length +
@@ -18,6 +19,8 @@ export class CandidateValidator {
     if (doc.elements.length > 100000)
       throw Error("Document exceeds 100000 objects");
     for (const e of doc.elements) {
+      if (e.pageId !== undefined && !pageIds.has(e.pageId))
+        throw Error("Object belongs to an unknown page");
       if (ids.has(e.id)) throw Error("Duplicate object ID");
       ids.add(e.id);
       points += e.kind === "stroke" ? (e.points?.length ?? 0) : 0;

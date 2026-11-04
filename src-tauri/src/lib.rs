@@ -1,6 +1,7 @@
 mod agent;
 mod credentials;
 mod local_links;
+mod plugins;
 mod storage;
 
 use base64::Engine;
@@ -257,15 +258,57 @@ async fn export_template(path: String, document: BoardDocument) -> Result<(), St
 #[tauri::command]
 async fn export_text(path: String, data: String, format: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        if !["csv", "tsv", "md", "json", "opml"].contains(&format.as_str())
-            || PathBuf::from(&path).extension().and_then(|v| v.to_str()) != Some(format.as_str())
+        if !["csv", "tsv", "md", "json", "opml", "lightpen-fragment"].contains(&format.as_str())
+            || PathBuf::from(&path)
+                .extension()
+                .and_then(|v| v.to_str())
+                .is_none_or(|extension| !extension.eq_ignore_ascii_case(&format))
         {
             return Err("Неподдерживаемый формат текста.".into());
         }
-        if data.len() > 8 * 1024 * 1024 {
-            return Err("Текстовый экспорт превышает 8 МБ.".into());
+        let limit = if format == "lightpen-fragment" {
+            64 * 1024 * 1024
+        } else {
+            8 * 1024 * 1024
+        };
+        if data.len() > limit {
+            return Err("Текстовый экспорт превышает допустимый размер.".into());
         }
         storage::atomic_bytes(&PathBuf::from(path), data.as_bytes())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn export_binary(path: String, data: String, format: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if !["png", "svg", "pdf", "zip"].contains(&format.as_str())
+            || PathBuf::from(&path)
+                .extension()
+                .and_then(|v| v.to_str())
+                .is_none_or(|extension| !extension.eq_ignore_ascii_case(&format))
+        {
+            return Err("Неподдерживаемый формат экспорта.".into());
+        }
+        if data.len() > 358_000_000 {
+            return Err("Экспорт превышает 256 МиБ.".into());
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|_| "Повреждены данные экспорта.")?;
+        if bytes.len() > 256 * 1024 * 1024 {
+            return Err("Экспорт превышает 256 МиБ.".into());
+        }
+        let header = match format.as_str() {
+            "png" => b"\x89PNG\r\n\x1a\n".as_slice(),
+            "pdf" => b"%PDF-".as_slice(),
+            "zip" => b"PK\x03\x04".as_slice(),
+            _ => b"<svg ".as_slice(),
+        };
+        if !bytes.starts_with(header) {
+            return Err("Неверный заголовок экспорта.".into());
+        }
+        storage::atomic_bytes(&PathBuf::from(path), &bytes)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -337,6 +380,22 @@ async fn open_local_file(path: String) -> Result<(), String> {
 }
 
 pub fn run() {
+    let mut context = tauri::generate_context!();
+    if let Some(profile) = selected_profile(std::env::var_os("LIGHT_PEN_PROFILE_DIR"))
+        .expect("Invalid Light Pen profile")
+    {
+        // Profile launches use their own single-instance identity. QA and other
+        // explicit local profiles must never forward commands to the user's board.
+        std::fs::create_dir_all(&profile).expect("Could not create Light Pen profile");
+        let resolved = std::fs::canonicalize(profile).expect("Could not resolve Light Pen profile");
+        use sha2::Digest;
+        let key = format!(
+            "{:x}",
+            sha2::Sha256::digest(resolved.to_string_lossy().to_lowercase().as_bytes())
+        );
+        context.config_mut().identifier =
+            format!("{}.profile-{}", context.config().identifier, &key[..24]);
+    }
     tauri::Builder::default()
         .setup(|app| {
             #[cfg(windows)]
@@ -375,6 +434,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(StorageState::default())
         .manage(agent::AgentState::default())
+        .manage(plugins::PluginsState::default())
         .invoke_handler(tauri::generate_handler![
             persist_document,
             open_document,
@@ -393,6 +453,7 @@ pub fn run() {
             export_template,
             export_vector,
             export_text,
+            export_binary,
             open_local_file,
             load_credentials,
             save_credentials,
@@ -403,9 +464,16 @@ pub fn run() {
             agent::agent_reply,
             agent::agent_file,
             agent::agent_recent,
-            agent::agent_open_link
+            agent::agent_open_link,
+            plugins::plugin_registry_load,
+            plugins::plugin_registry_save,
+            plugins::plugin_file,
+            plugins::plugin_process_start,
+            plugins::plugin_process_send,
+            plugins::plugin_process_read,
+            plugins::plugin_process_stop
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("Light Pen could not start");
 }
 

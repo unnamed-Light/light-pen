@@ -42,6 +42,10 @@ import { StructuredEditor } from "./StructuredEditor";
 import { Planning } from "./Planning";
 import { ToolIcon } from "./ToolIcon";
 import { CustomColor, TextControls } from "./TextControls";
+import {
+  buildFragment,
+  importFragmentElements,
+} from "../editor/model/fragments";
 
 export const KIND_NAMES: Record<SceneElement["kind"], string> = {
   stroke: "Штрих",
@@ -622,7 +626,13 @@ export function Studio({
       if (!elements.length) throw new Error("Выделите объекты для шаблона.");
       const doc = {
         ...createDocument(templateName.trim().slice(0, 250) || "Новый шаблон"),
-        elements: structuredClone(elements),
+        elements: importFragmentElements(
+          buildFragment(
+            editor.document,
+            elements.map((e) => e.id),
+          ),
+          { pageId: "main" },
+        ).elements,
       };
       await saveTemplate(doc);
       setTemplates(await listTemplates());

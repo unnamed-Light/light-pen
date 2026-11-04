@@ -10,6 +10,7 @@ import {
 import { connectorPoints, connectorMidpoint } from "../model/connectors";
 import { drawStructured } from "./structured";
 import type { InkPoint, RenderStats, SceneElement } from "../model/types";
+import { reviewFor } from "../../platform/review";
 
 const INK_BLOCK = 256,
   INK_TAIL = 512,
@@ -334,12 +335,14 @@ export class BoardRenderer {
       if (
         camera.zoom < 0.18 &&
         (el.fontSize ?? 18) * camera.zoom < 4 &&
-        ["text", "sticky", "table", "task", "link", "math"].includes(el.kind)
+        (["text", "sticky", "table", "task", "link", "math"].includes(el.kind) ||
+          !!el.widget)
       ) {
         this.drawOverview(ctx, el);
         continue;
       }
       if (
+        !el.widget &&
         !el.rotation &&
         !el.connectorStyle &&
         !el.label &&
@@ -654,7 +657,7 @@ export class BoardRenderer {
       if (fraction >= 1) ctx.fill(this.inkPath(el));
       else this.drawPartialInk(ctx, el, fraction);
     } else if (
-      el.kind === "rectangle" ||
+      (el.kind === "rectangle" && !el.widget) ||
       el.kind === "ellipse" ||
       el.kind === "diamond"
     ) {
@@ -747,14 +750,15 @@ export class BoardRenderer {
         5,
         Math.max(1, el.width - 20),
       );
-    } else if (el.kind === "text" || el.kind === "sticky") {
-      const sticky = el.kind === "sticky",
+    } else if (el.kind === "text" || el.kind === "sticky" || el.widget) {
+      const sticky = el.kind === "sticky" || !!el.widget,
         padding = sticky ? 20 : 0;
       if (sticky) {
         ctx.fillStyle = el.fill === "transparent" ? "#fff1a8" : el.fill;
         ctx.beginPath();
         ctx.roundRect(0, 0, el.width, el.height, 4);
         ctx.fill();
+        if (el.widget) ctx.stroke();
         ctx.fillStyle = "#000000";
         ctx.globalAlpha = el.opacity * 0.035;
         ctx.fillRect(0, el.height - 5, el.width, 5);
@@ -772,7 +776,7 @@ export class BoardRenderer {
       if (!lines) {
         lines = wrapText(
           ctx,
-          el.text ?? "",
+          el.widget?.fallback ?? el.text ?? "",
           Math.max(10, el.width - padding * 2),
         );
         this.textLayouts.set(el, lines);
@@ -929,6 +933,38 @@ export class BoardRenderer {
     if (this.editor.replay) return;
     this.worldTransform(ctx);
     const view = this.editor.visibleBounds();
+    const viewed = reviewFor(this.editor).ids();
+    if (viewed.size) {
+      ctx.save();
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = this.dark ? "#54b054" : "#107c10";
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.lineWidth = 2 / c.zoom;
+      for (const frame of this.editor.elements) {
+        if (frame.kind !== "frame" || frame.hidden || !viewed.has(frame.id))
+          continue;
+        if (!intersects(bounds(frame), view)) continue;
+        ctx.save();
+        const center = rotationCenter(frame);
+        ctx.translate(center.x, center.y);
+        ctx.rotate(((frame.rotation ?? 0) * Math.PI) / 180);
+        ctx.translate(-center.x, -center.y);
+        const gap = 3 / c.zoom;
+        ctx.strokeRect(
+          frame.x - gap,
+          frame.y - gap,
+          frame.width + gap * 2,
+          frame.height + gap * 2,
+        );
+        if (Math.min(frame.width, frame.height) * c.zoom < 32) {
+          ctx.beginPath();
+          ctx.arc(frame.x, frame.y, 4 / c.zoom, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+      ctx.restore();
+    }
     for (const guide of this.editor.guides) {
       ctx.strokeStyle = "#d34d9b";
       ctx.lineWidth = 1 / c.zoom;
@@ -1082,7 +1118,12 @@ export class BoardRenderer {
     }
     const w = b.maxX - b.minX + 64,
       h = b.maxY - b.minY + 64,
-      scale = Math.min(2, maxSide / w, maxSide / h, Math.sqrt(32_000_000 / (w * h)));
+      scale = Math.min(
+        2,
+        maxSide / w,
+        maxSide / h,
+        Math.sqrt(32_000_000 / (w * h)),
+      );
     const canvas = document.createElement("canvas");
     canvas.width = Math.max(1, Math.ceil(w * scale));
     canvas.height = Math.max(1, Math.ceil(h * scale));
